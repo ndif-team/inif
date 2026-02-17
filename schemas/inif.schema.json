@@ -1,0 +1,511 @@
+{
+  "$defs": {
+    "Metadata": {
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/ModelInfo"
+        },
+        "inif_version": {
+          "default": "0.1",
+          "title": "Inif Version",
+          "type": "string"
+        },
+        "packages": {
+          "additionalProperties": true,
+          "title": "Packages",
+          "type": "object"
+        },
+        "sources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "source_eval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceEval"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created At"
+        },
+        "total_samples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Samples"
+        },
+        "total_time": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Time"
+        },
+        "extra": {
+          "additionalProperties": true,
+          "title": "Extra",
+          "type": "object"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "Metadata",
+      "type": "object"
+    },
+    "ModelInfo": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "huggingface_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Huggingface Id"
+        },
+        "generation_config": {
+          "additionalProperties": true,
+          "title": "Generation Config",
+          "type": "object"
+        },
+        "loading_config": {
+          "additionalProperties": true,
+          "title": "Loading Config",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ModelInfo",
+      "type": "object"
+    },
+    "Sample": {
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Id"
+        },
+        "tokens": {
+          "items": {
+            "$ref": "#/$defs/Token"
+          },
+          "title": "Tokens",
+          "type": "array"
+        },
+        "texts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Texts",
+          "type": "array"
+        },
+        "spans": {
+          "items": {
+            "$ref": "#/$defs/Span"
+          },
+          "title": "Spans",
+          "type": "array"
+        },
+        "scores": {
+          "items": {
+            "$ref": "#/$defs/SampleScore"
+          },
+          "title": "Scores",
+          "type": "array"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "total_time": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Time"
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Tokens"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Sample",
+      "type": "object"
+    },
+    "SampleScore": {
+      "properties": {
+        "scorer": {
+          "title": "Scorer",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "additionalProperties": true,
+              "type": "object"
+            }
+          ],
+          "title": "Value"
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answer"
+        },
+        "explanation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Explanation"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "scorer",
+        "value"
+      ],
+      "title": "SampleScore",
+      "type": "object"
+    },
+    "Sequence": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "tokens": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tokens",
+          "type": "array"
+        },
+        "n_tokens": {
+          "title": "N Tokens",
+          "type": "integer"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        }
+      },
+      "required": [
+        "id",
+        "tokens",
+        "n_tokens"
+      ],
+      "title": "Sequence",
+      "type": "object"
+    },
+    "SourceEval": {
+      "properties": {
+        "framework": {
+          "title": "Framework",
+          "type": "string"
+        },
+        "framework_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Framework Version"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task"
+        },
+        "task_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Version"
+        },
+        "eval_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eval Id"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "extra": {
+          "additionalProperties": true,
+          "title": "Extra",
+          "type": "object"
+        }
+      },
+      "required": [
+        "framework"
+      ],
+      "title": "SourceEval",
+      "type": "object"
+    },
+    "Span": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "positions": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Positions",
+          "type": "array"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Span",
+      "type": "object"
+    },
+    "Token": {
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        },
+        "token": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token"
+        },
+        "sequence_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sequence Id"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Token",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "sequences": {
+      "items": {
+        "$ref": "#/$defs/Sequence"
+      },
+      "title": "Sequences",
+      "type": "array"
+    },
+    "samples": {
+      "items": {
+        "$ref": "#/$defs/Sample"
+      },
+      "title": "Samples",
+      "type": "array"
+    }
+  },
+  "required": [
+    "metadata"
+  ],
+  "title": "InifDocument",
+  "type": "object"
+}

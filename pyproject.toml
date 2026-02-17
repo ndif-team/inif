@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools_scm]
+
+[project]
+dynamic = ["version"]
+name = "inif"
+authors = [
+  { name="The NDIF Team", email="info@ndif.us" },
+]
+description = "INterpretability Interchange Format for tokenized LLM generation traces"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Development Status :: 3 - Alpha"
+]
+dependencies = [
+    "pydantic>=2.0",
+    "transformers",
+]
+[project.optional-dependencies]
+inspect = ["inspect-ai"]
+
+[project.scripts]
+inif = "inif.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "ruff",
+    "ty",
+    "build",
+    "pre-commit",
+]
+
+[tool.setuptools]
+packages = ["inif", "inif.converters", "inif.tests"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+inif = ["py.typed"]
+"*" = ["tests/*"]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.src]
+exclude = ["inif/tests/"]
+
+[tool.ty.analysis]
+allowed-unresolved-imports = ["pydantic.**", "transformers.**", "inspect_ai.**"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

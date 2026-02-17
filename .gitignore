@@ -1,0 +1,25 @@
+# project specific
+.coverage
+.idea
+
+# general
+.junk/**
+junk**
+.claude/settings.local.json
+*.log
+build/
+dist/
+public/
+*.egg-info/
+.installed.cfg
+.vscode
+__pycache__/
+.DS_STORE
+.nfs*
+.env
+.venv
+
+examples/*.json
+examples/*.html
+examples/*.inif
+examples/*.json.gz
