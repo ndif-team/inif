@@ -52,7 +52,7 @@ python-version = "3.11"
 exclude = ["inif/tests/"]
 
 [tool.ty.analysis]
-allowed-unresolved-imports = ["pydantic.**", "transformers.**", "inspect_ai.**"]
+allowed-unresolved-imports = ["pydantic.**", "transformers.**", "inspect_ai.**", "IPython.**"]
 
 [tool.ruff]
 line-length = 88
