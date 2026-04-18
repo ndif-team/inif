@@ -74,21 +74,20 @@ def select_by_span(sample: Sample, span_name: str) -> TokenSelection:
     )
 
 
-def select_by_score(
+def filter_samples_by_score(
     doc: InifDocument,
     scorer: str,
     predicate: Callable[[str | int | float | bool | list | dict], bool],
-) -> list[TokenSelection]:
-    results = []
+) -> list[Sample]:
+    """Return samples whose ``scorer`` value satisfies ``predicate``.
+
+    Compose with the position selectors above (``select_by_tag`` etc.) on
+    each returned sample to drill down to specific tokens.
+    """
+    results: list[Sample] = []
     for sample in doc.samples:
         for score in sample.scores:
             if score.scorer == scorer and predicate(score.value):
-                results.append(
-                    TokenSelection(
-                        sample_id=sample.id,
-                        tokens=list(sample.tokens),
-                        positions=list(range(len(sample.tokens))),
-                    )
-                )
+                results.append(sample)
                 break
     return results

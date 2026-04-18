@@ -79,7 +79,7 @@ def test_from_texts_metadata():
     )
     assert doc.metadata.model.name == "test-model"
     assert doc.metadata.model.revision == "abc123"
-    assert doc.metadata.total_samples == 1
+    assert doc.total_samples == 1
 
 
 def test_from_text_files():

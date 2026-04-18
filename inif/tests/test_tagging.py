@@ -62,6 +62,30 @@ def test_tag_by_regex_all(doc):
         assert "greeting" in _get_tags(s.tokens[0])
 
 
+def test_tag_by_regex_materializes_inside_ref(sample, sequences):
+    """Matches inside a sequence ref should materialize the ref and tag the
+    specific matching token, not the ref placeholder."""
+    # sample.tokens[0] is a ref to seq_0 = ["<|endoftext|>", "This", " is"]
+    n_before = len(sample.tokens)
+    tag_by_regex(sample, r"^This$", "capitalized", sequences=sequences)
+
+    # The ref containing "This" was materialized into 3 tokens, so length grew by 2.
+    assert len(sample.tokens) == n_before + 2
+    # The matching token now lives in sample.tokens with its tag attached.
+    matching = [t for t in sample.tokens if t.has_tag("capitalized")]
+    assert len(matching) == 1
+    assert matching[0].token == "This"
+    assert matching[0].id == 1212  # original id is preserved
+
+
+def test_tag_by_regex_no_materialization_when_no_match(sample, sequences):
+    """If the regex doesn't match anything inside a ref, the ref stays compressed."""
+    n_before = len(sample.tokens)
+    tag_by_regex(sample, r"^nope$", "x", sequences=sequences)
+    assert len(sample.tokens) == n_before
+    assert sample.tokens[0].is_sequence_ref
+
+
 def test_tag_by_predicate(sample_flat):
     tag_by_predicate(sample_flat, lambda t: t.id > 1000, "high_id")
     tagged = [t for t in sample_flat.tokens if "high_id" in _get_tags(t)]
@@ -271,7 +295,8 @@ def test_tag_chat_roles_with_sequences():
 
     # Simulate dedup: "<s>[user]" (first 9 chars) becomes a sequence
     seq_tokens = [t.token for t in all_tokens[:9]]
-    seq = Sequence(id="seq_0", tokens=seq_tokens, n_tokens=len(seq_tokens))
+    seq_ids = [t.id for t in all_tokens[:9]]
+    seq = Sequence(id="seq_0", tokens=seq_tokens, ids=seq_ids, n_tokens=len(seq_tokens))
     # Sample has: ref + "H" + "i" + "[" + "/" + "u" + "s" + "e" + "r" + "]"
     sample_tokens = [Token(id=-1, sequence_id="seq_0")] + [
         Token(id=t.id, token=t.token) for t in all_tokens[9:]

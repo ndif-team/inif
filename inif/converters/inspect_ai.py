@@ -10,6 +10,7 @@ from inif.models import (
     ModelInfo,
     Sample,
     SampleScore,
+    Sequence,
     SourceEval,
     Token,
 )
@@ -151,6 +152,112 @@ def _convert_scores(sample: Any) -> list[SampleScore]:
     return scores
 
 
+def _last_assistant_content(msg_dicts: list[dict[str, str]]) -> str | None:
+    for msg in reversed(msg_dicts):
+        if msg.get("role") == "assistant":
+            content = msg.get("content")
+            return content if content else None
+    return None
+
+
+def _find_assistant_token_range(
+    tokens: list[Token],
+    msg_dicts: list[dict[str, str]],
+    tokenizer: Any,
+) -> tuple[int, int] | None:
+    """Locate the [start, end) token indices that cover the LAST assistant
+    message's content within the chat-template-formatted token stream.
+
+    Returns ``None`` when the formatted string can't be reconstructed from the
+    token sequence (e.g. a tokenizer that drops bytes), or when the content
+    can't be located unambiguously.
+    """
+    content = _last_assistant_content(msg_dicts)
+    if content is None:
+        return None
+    if not hasattr(tokenizer, "apply_chat_template"):
+        return None
+
+    formatted = tokenizer.apply_chat_template(
+        msg_dicts, tokenize=False, add_generation_prompt=False
+    )
+    decoded = [t.token or "" for t in tokens]
+    if "".join(decoded) != formatted:
+        return None
+
+    char_start = formatted.rfind(content)
+    if char_start < 0:
+        return None
+    char_end = char_start + len(content)
+
+    pos = 0
+    tok_start: int | None = None
+    tok_end: int | None = None
+    for i, s in enumerate(decoded):
+        s_start, s_end = pos, pos + len(s)
+        if tok_start is None and s_end > char_start:
+            tok_start = i
+        if s_start < char_end:
+            tok_end = i + 1
+        pos = s_end
+    if tok_start is None or tok_end is None:
+        return None
+    return tok_start, tok_end
+
+
+def _extract_logprobs(inspect_sample: Any) -> list[float | None] | None:
+    """Pull per-token logprobs for the model's response, or None if absent."""
+    output = getattr(inspect_sample, "output", None)
+    if not output:
+        return None
+    choices = getattr(output, "choices", None)
+    if not choices:
+        return None
+    logprobs = getattr(choices[0], "logprobs", None)
+    if not logprobs:
+        return None
+    content = getattr(logprobs, "content", None)
+    if not content:
+        return None
+    return [getattr(item, "logprob", None) for item in content]
+
+
+def _annotate_response_tokens(
+    sample: Sample,
+    msg_dicts: list[dict[str, str]],
+    tokenizer: Any,
+    inspect_sample: Any,
+    tag_generated: bool,
+    extract_logprobs: bool,
+) -> None:
+    """Tag the model's response tokens and attach per-token logprobs.
+
+    Both behaviors require a HF tokenizer with ``apply_chat_template`` and a
+    successful round-trip from tokens back to the formatted string. When that
+    fails, the call is a no-op (these are convenience annotations, not invariants).
+    """
+    if not (tag_generated or extract_logprobs):
+        return
+    if tokenizer is None or not msg_dicts:
+        return
+
+    rng = _find_assistant_token_range(sample.tokens, msg_dicts, tokenizer)
+    if rng is None:
+        return
+    start, end = rng
+
+    if tag_generated:
+        for i in range(start, end):
+            sample.tokens[i].add_tag("generated")
+
+    if extract_logprobs:
+        logprobs = _extract_logprobs(inspect_sample)
+        if logprobs is not None and len(logprobs) == end - start:
+            for offset, lp in enumerate(logprobs):
+                if lp is not None:
+                    sample.tokens[start + offset].set_extra("logprob", lp)
+
+
 def from_eval_log(
     eval_log: Any,
     tokenizer: Any = None,
@@ -158,6 +265,8 @@ def from_eval_log(
     include_messages: bool = True,
     deduplicate: bool = True,
     tag_chat_roles: bool = True,
+    tag_generated: bool = True,
+    extract_logprobs: bool = True,
 ) -> InifDocument:
     """Convert an Inspect AI EvalLog to an InifDocument.
 
@@ -169,6 +278,11 @@ def from_eval_log(
         include_messages: Whether to include message-level text segments.
         deduplicate: Whether to run sequence deduplication.
         tag_chat_roles: Whether to add 'role' extra field to tokens.
+        tag_generated: Whether to tag the model's response tokens with
+            ``"generated"``. The response is the last assistant message.
+        extract_logprobs: Whether to attach per-token logprobs from the eval
+            output to the response tokens (best-effort: requires the tokenizer
+            and the eval-source tokenization to agree on token count).
     """
     if tokenizer is None and tokenizer_name is not None:
         from transformers import AutoTokenizer
@@ -190,13 +304,15 @@ def from_eval_log(
                 completed = datetime.fromisoformat(completed)
             total_time = (completed - started).total_seconds()
 
-    samples = []
+    samples: list[Sample] = []
+    inspect_samples: list[Any] = []
     all_msg_dicts: list[list[dict[str, str]]] = []
     if eval_log.samples:
         for i, inspect_sample in enumerate(eval_log.samples):
-            sample_id = getattr(inspect_sample, "id", i)
-            if sample_id is None:
-                sample_id = i
+            sample_id_raw = getattr(inspect_sample, "id", i)
+            if sample_id_raw is None:
+                sample_id_raw = i
+            sample_id = str(sample_id_raw)
 
             texts: list[str] = []
             sample_tokens: list[Token] = []
@@ -214,6 +330,7 @@ def from_eval_log(
                 msg_dicts = _extract_message_dicts(inspect_sample.messages)
                 texts, sample_tokens = _messages_to_tokens(msg_dicts, tokenizer)
             all_msg_dicts.append(msg_dicts)
+            inspect_samples.append(inspect_sample)
 
             scores = _convert_scores(inspect_sample)
 
@@ -225,24 +342,34 @@ def from_eval_log(
                 input_toks = getattr(usage, "input_tokens", None)
                 output_toks = getattr(usage, "output_tokens", None)
 
-            samples.append(
-                Sample(
-                    id=sample_id,
-                    texts=texts,
-                    tokens=sample_tokens,
-                    scores=scores,
-                    target=target,
-                    input_tokens=input_toks,
-                    output_tokens=output_toks,
-                )
+            sample = Sample(
+                id=sample_id,
+                texts=texts,
+                tokens=sample_tokens,
+                scores=scores,
+                target=target,
+                input_tokens=input_toks,
+                output_tokens=output_toks,
             )
+
+            # Annotate response tokens BEFORE dedup so the per-token tags and
+            # logprobs become part of the extras that prevent collapsing.
+            _annotate_response_tokens(
+                sample,
+                msg_dicts,
+                tokenizer,
+                inspect_sample,
+                tag_generated=tag_generated,
+                extract_logprobs=extract_logprobs,
+            )
+
+            samples.append(sample)
 
     metadata = Metadata(
         model=model_info,
         packages=_get_package_versions(),
         source_eval=source_eval,
-        created_at=datetime.now(timezone.utc).isoformat(),
-        total_samples=len(samples),
+        created_at=datetime.now(timezone.utc),
         total_time=total_time,
     )
 
@@ -270,3 +397,8 @@ def from_eval_file(path: str, **kwargs: Any) -> InifDocument:
     doc = from_eval_log(eval_log, **kwargs)
     doc.metadata.sources.append(str(path))
     return doc
+
+
+# Re-export Sequence for downstream typing convenience (used internally above
+# only via type hints). Kept to avoid silent import errors after refactors.
+__all__ = ["from_eval_log", "from_eval_file", "Sequence"]

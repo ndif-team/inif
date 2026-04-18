@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from inif.models import InifDocument, Sequence, Token
+from inif.models import InifDocument, Sample, Sequence, Token
 
 
 def _get_contiguous_sequences(
@@ -53,12 +53,40 @@ def _has_extra_fields(token: Token) -> bool:
     return bool(token.model_extra)
 
 
+def _clean_pairs(sample: Sample) -> list[tuple[str, int]]:
+    """Project a sample's tokens to (string, id) pairs, dropping refs and tokens
+    with extras. This matches the projection used by ``_find_common_contiguous``."""
+    return [
+        (t.token or "", t.id)
+        for t in sample.tokens
+        if not t.is_sequence_ref and not _has_extra_fields(t)
+    ]
+
+
+def _capture_ids_for_sequence(sample: Sample, seq_strs: list[str]) -> list[int] | None:
+    """Find the first contiguous (clean) window in ``sample`` matching
+    ``seq_strs`` and return the corresponding token ids. Returns ``None`` if no
+    match (which shouldn't happen for sequences produced by the dedup
+    intersection algorithm)."""
+    pairs = _clean_pairs(sample)
+    n = len(seq_strs)
+    for start in range(len(pairs) - n + 1):
+        window = pairs[start : start + n]
+        if [s for s, _ in window] == seq_strs:
+            return [i for _, i in window]
+    return None
+
+
 def _replace_sequences_in_tokens(
     tokens: list[Token],
     sequences: list[Sequence],
 ) -> list[Token]:
-    """Greedy longest-match replacement of token sequences with refs."""
-    # Sort sequences by length descending for greedy matching
+    """Greedy longest-match replacement of token sequences with refs.
+
+    A window is only replaced when both the token strings AND ids match the
+    sequence — this guards against (rare) cases where two samples share a
+    string subsequence but have different ids for those positions.
+    """
     sorted_seqs = sorted(sequences, key=lambda s: s.n_tokens, reverse=True)
 
     new_tokens: list[Token] = []
@@ -69,18 +97,17 @@ def _replace_sequences_in_tokens(
             seq_len = seq.n_tokens
             if i + seq_len > len(tokens):
                 continue
-            # Check if tokens at this position match the sequence
             window = tokens[i : i + seq_len]
-            # Skip if any token in window has extra fields or is already a ref
             if any(_has_extra_fields(t) or t.is_sequence_ref for t in window):
                 continue
-            token_strs = [t.token for t in window]
-            if token_strs == seq.tokens:
-                ref_token = Token(id=-1, sequence_id=seq.id)
-                new_tokens.append(ref_token)
-                i += seq_len
-                matched = True
-                break
+            if [t.token for t in window] != seq.tokens:
+                continue
+            if [t.id for t in window] != seq.ids:
+                continue
+            new_tokens.append(Token(id=-1, sequence_id=seq.id))
+            i += seq_len
+            matched = True
+            break
         if not matched:
             new_tokens.append(tokens[i])
             i += 1
@@ -94,37 +121,34 @@ def deduplicate_sequences(
     """Find sequences common to ALL samples (intersection), replace with refs.
 
     Skips tokens with extra fields (have interpretability data attached).
+    Captured Sequences store both the token strings and the original token ids
+    so a downstream expansion (e.g. when interpretability outputs are attached
+    to ref-internal positions) can restore the exact ids.
     """
     doc = doc.model_copy(deep=True)
 
-    # Build token string lists for each sample, excluding tokens with extra fields
-    token_lists: list[list[str]] = []
-    for sample in doc.samples:
-        strs = [
-            t.token or ""
-            for t in sample.tokens
-            if not t.is_sequence_ref and not _has_extra_fields(t)
-        ]
-        token_lists.append(strs)
-
-    if not token_lists:
+    if not doc.samples:
         return doc
 
-    # Find common sequences across all samples
+    token_lists = [[s for s, _ in _clean_pairs(sample)] for sample in doc.samples]
+
     common = _find_common_contiguous(token_lists, min_length)
     if not common:
         return doc
 
-    # Filter to maximal (longest non-overlapping)
     maximal = _filter_maximal_sequences(common)
     if not maximal:
         return doc
 
-    # Assign sequence IDs
     existing_ids = {s.id for s in doc.sequences}
     next_idx = 0
     for seq_tokens in maximal:
-        # Find a unique ID
+        seq_ids = _capture_ids_for_sequence(doc.samples[0], seq_tokens)
+        if seq_ids is None:
+            # Should be unreachable: maximal sequences are present in every
+            # sample's clean projection by construction.
+            continue
+
         while f"sequence_{next_idx}" in existing_ids:
             next_idx += 1
         seq_id = f"sequence_{next_idx}"
@@ -133,12 +157,12 @@ def deduplicate_sequences(
         seq = Sequence(
             id=seq_id,
             tokens=seq_tokens,
+            ids=seq_ids,
             n_tokens=len(seq_tokens),
         )
         doc.sequences.append(seq)
         next_idx += 1
 
-    # Replace sequences in all samples
     for sample in doc.samples:
         sample.tokens = _replace_sequences_in_tokens(sample.tokens, doc.sequences)
 
@@ -146,7 +170,7 @@ def deduplicate_sequences(
 
 
 def expand_sequences(doc: InifDocument) -> InifDocument:
-    """Expand all sequence references back to flat tokens."""
+    """Expand all sequence references back to flat tokens with original ids."""
     doc = doc.model_copy(deep=True)
     seq_map = doc.sequence_map
     for sample in doc.samples:
@@ -160,8 +184,8 @@ def expand_sequences(doc: InifDocument) -> InifDocument:
                     f"Sequence '{token.sequence_id}' not found"
                 )
                 seq = seq_map[token.sequence_id]
-                for tstr in seq.tokens:
-                    new_tokens.append(Token(id=0, token=tstr, sequence_id=seq.id))
+                for tid, tstr in zip(seq.ids, seq.tokens):
+                    new_tokens.append(Token(id=tid, token=tstr, sequence_id=seq.id))
             else:
                 new_tokens.append(token)
         sample.tokens = new_tokens

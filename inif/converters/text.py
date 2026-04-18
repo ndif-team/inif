@@ -103,8 +103,7 @@ def from_texts(
     metadata = Metadata(
         model=model_info,
         packages=_get_package_versions(),
-        created_at=datetime.now(timezone.utc).isoformat(),
-        total_samples=len(samples),
+        created_at=datetime.now(timezone.utc),
     )
 
     doc = InifDocument(metadata=metadata, samples=samples)

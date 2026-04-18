@@ -16,34 +16,8 @@ class TextTagMode(str, Enum):
 
 
 def _get_tags(token: Token) -> list[str]:
-    """Get tags from token extra field."""
-    return getattr(token, "tags", [])
-
-
-def _add_tag(token: Token, tag: str) -> None:
-    """Add a tag to a token's extra field."""
-    tags = _get_tags(token)
-    if tag not in tags:
-        tags = list(tags) + [tag]
-        token.__dict__["tags"] = tags
-        # Also update pydantic's extra fields
-        if token.model_extra is not None:
-            token.model_extra["tags"] = tags
-
-
-def _remove_tag_from_token(token: Token, tag: str) -> None:
-    """Remove a tag from a token's extra field."""
-    tags = _get_tags(token)
-    if tag in tags:
-        tags = [t for t in tags if t != tag]
-        if tags:
-            token.__dict__["tags"] = tags
-            if token.model_extra is not None:
-                token.model_extra["tags"] = tags
-        else:
-            token.__dict__.pop("tags", None)
-            if token.model_extra is not None:
-                token.model_extra.pop("tags", None)
+    """Backwards-compatible accessor; prefer ``token.tags``."""
+    return token.tags
 
 
 def tag_by_regex(
@@ -52,34 +26,30 @@ def tag_by_regex(
     tag: str,
     sequences: list[Sequence] | None = None,
 ) -> None:
+    """Tag every token whose string matches ``pattern``.
+
+    When ``sequences`` is provided, the search runs over the *expanded* view
+    of the sample so tokens currently compressed inside a sequence ref are
+    inspected too. Matches inside a ref cause the containing ref to be
+    materialized in this sample (per-token information attaches to real
+    Tokens; other refs and other samples are untouched).
+    """
     compiled = re.compile(pattern)
-    if sequences:
-        expanded = sample.get_expanded_tokens(sequences)
-        # Map expanded tokens back to original indices
-        orig_idx = 0
-        exp_idx = 0
-        for orig_token in sample.tokens:
-            if orig_token.is_sequence_ref:
-                # This token expands to multiple tokens
-                assert orig_token.sequence_id is not None
-                seq_map = {s.id: s for s in sequences}
-                seq = seq_map[orig_token.sequence_id]
-                n_expanded = seq.n_tokens
-                for ei in range(n_expanded):
-                    et = expanded[exp_idx + ei]
-                    if et.token is not None and compiled.search(et.token):
-                        _add_tag(orig_token, tag)
-                        break
-                exp_idx += n_expanded
-            else:
-                if orig_token.token is not None and compiled.search(orig_token.token):
-                    _add_tag(orig_token, tag)
-                exp_idx += 1
-            orig_idx += 1
-    else:
+    if not sequences:
         for token in sample.tokens:
             if token.token is not None and compiled.search(token.token):
-                _add_tag(token, tag)
+                token.add_tag(tag)
+        return
+
+    expanded = sample.get_expanded_tokens(sequences)
+    matching_positions = [
+        i
+        for i, t in enumerate(expanded)
+        if t.token is not None and compiled.search(t.token)
+    ]
+    for pos in matching_positions:
+        _, real_token = sample.materialize_position(pos, sequences)
+        real_token.add_tag(tag)
 
 
 def tag_by_regex_all(doc: InifDocument, pattern: str, tag: str) -> None:
@@ -99,6 +69,10 @@ def tag_by_text_regex(
     then maps character spans back to token indices. This handles
     BPE subword splits (e.g. "Eiffel" split into [" E", "iff", "el"]).
 
+    Operates directly on ``sample.tokens``; sequence refs are not expanded
+    here. To match inside refs, call ``sample.materialize_position`` first
+    or apply this on a fully expanded view.
+
     Args:
         sample: The sample to tag.
         pattern: Regex pattern to match against the concatenated text.
@@ -110,20 +84,15 @@ def tag_by_text_regex(
     """
     mode = TextTagMode(mode)
     compiled = re.compile(pattern)
-    # Build character-to-token mapping
-    token_strings: list[str] = []
-    for t in sample.tokens:
-        token_strings.append(t.token if t.token is not None else "")
+    token_strings = [t.token if t.token is not None else "" for t in sample.tokens]
     joined = "".join(token_strings)
 
-    # Compute character offset for each token
     offsets: list[tuple[int, int]] = []
     pos = 0
     for s in token_strings:
         offsets.append((pos, pos + len(s)))
         pos += len(s)
 
-    # Find all matches and map back to token indices
     for m in compiled.finditer(joined):
         m_start, m_end = m.start(), m.end()
         matching_indices = [
@@ -134,12 +103,12 @@ def tag_by_text_regex(
         if not matching_indices:
             continue
         if mode is TextTagMode.FIRST:
-            _add_tag(sample.tokens[matching_indices[0]], tag)
+            sample.tokens[matching_indices[0]].add_tag(tag)
         elif mode is TextTagMode.LAST:
-            _add_tag(sample.tokens[matching_indices[-1]], tag)
+            sample.tokens[matching_indices[-1]].add_tag(tag)
         else:
             for i in matching_indices:
-                _add_tag(sample.tokens[i], tag)
+                sample.tokens[i].add_tag(tag)
 
 
 def tag_by_text_regex_all(
@@ -157,20 +126,20 @@ def tag_by_predicate(
     sample: Sample, predicate: Callable[[Token], bool], tag: str
 ) -> None:
     for token in sample.tokens:
-        if predicate(token) and tag not in _get_tags(token):
-            _add_tag(token, tag)
+        if predicate(token):
+            token.add_tag(tag)
 
 
 def tag_positions(sample: Sample, positions: list[int], tag: str) -> None:
     pos_set = set(positions)
     for i, token in enumerate(sample.tokens):
-        if i in pos_set and tag not in _get_tags(token):
-            _add_tag(token, tag)
+        if i in pos_set:
+            token.add_tag(tag)
 
 
 def remove_tag(sample: Sample, tag: str) -> None:
     for token in sample.tokens:
-        _remove_tag_from_token(token, tag)
+        token.remove_tag(tag)
 
 
 def remove_tag_all(doc: InifDocument, tag: str) -> None:
@@ -179,7 +148,7 @@ def remove_tag_all(doc: InifDocument, tag: str) -> None:
 
 
 def create_span_from_tag(sample: Sample, tag: str, span_name: str) -> Span:
-    positions = [i for i, t in enumerate(sample.tokens) if tag in _get_tags(t)]
+    positions = [i for i, t in enumerate(sample.tokens) if t.has_tag(tag)]
     span = Span(name=span_name, positions=positions, tags=[tag])
     sample.spans.append(span)
     return span
@@ -215,7 +184,6 @@ def tag_chat_roles(
     )
     decoded = [t.token or "" for t in expanded]
 
-    # Build character offsets for each token
     offsets: list[tuple[int, int]] = []
     pos = 0
     for s in decoded:
@@ -228,7 +196,6 @@ def tag_chat_roles(
         f"({len(concatenated)} vs {len(formatted)} chars)"
     )
 
-    # Find each message's content as a character span
     content_spans: list[tuple[int, int, str]] = []
     search_from = 0
     for msg in messages:
@@ -240,7 +207,6 @@ def tag_chat_roles(
             content_spans.append((idx, idx + len(content), msg["role"]))
             search_from = idx + len(content)
 
-    # Assign a role to every expanded position
     roles: list[str] = []
     for i in range(len(expanded)):
         tok_start, tok_end = offsets[i]
@@ -251,7 +217,8 @@ def tag_chat_roles(
                 break
         roles.append(role)
 
-    # Write roles to non-ref tokens in sample.tokens, skipping ref tokens
+    # Write roles to non-ref tokens; ref tokens stay collapsed because their
+    # contents share a single role within a deduplicated chat template.
     exp_idx = 0
     seq_map = {s.id: s for s in sequences} if sequences else {}
     for tok in sample.tokens:
@@ -260,9 +227,7 @@ def tag_chat_roles(
             n = seq_map[tok.sequence_id].n_tokens
             exp_idx += n
         else:
-            tok.__dict__["role"] = roles[exp_idx]
-            if tok.model_extra is not None:
-                tok.model_extra["role"] = roles[exp_idx]
+            tok.set_extra("role", roles[exp_idx])
             exp_idx += 1
 
 
@@ -290,9 +255,5 @@ def tag_special_tokens(sample: Sample, tokenizer, tag: str = "special") -> None:
     if hasattr(tokenizer, "all_special_ids"):
         special_ids = set(tokenizer.all_special_ids)
     for token in sample.tokens:
-        if (
-            not token.is_sequence_ref
-            and token.id in special_ids
-            and tag not in _get_tags(token)
-        ):
-            _add_tag(token, tag)
+        if not token.is_sequence_ref and token.id in special_ids:
+            token.add_tag(tag)

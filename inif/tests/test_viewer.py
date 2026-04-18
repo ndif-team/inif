@@ -281,9 +281,7 @@ def test_render_html_no_exact_match_scorer():
 
 
 def _set_extra(tok, key, value):
-    tok.__dict__[key] = value
-    if tok.model_extra is not None:
-        tok.model_extra[key] = value
+    tok.set_extra(key, value)
 
 
 def _make_role_doc():
@@ -648,7 +646,9 @@ def test_render_html_seq_ref_expanded_into_individual_tokens():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="seq_exp")),
         sequences=[
-            Sequence(id="s0", tokens=["Hello", " world", "!"], n_tokens=3),
+            Sequence(
+                id="s0", tokens=["Hello", " world", "!"], ids=[1, 2, 3], n_tokens=3
+            ),
         ],
         samples=[
             Sample(
@@ -675,7 +675,7 @@ def test_render_html_seq_ref_wraps_like_normal_tokens():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="wrap")),
         sequences=[
-            Sequence(id="s0", tokens=["a", "b"], n_tokens=2),
+            Sequence(id="s0", tokens=["a", "b"], ids=[1, 2], n_tokens=2),
         ],
         samples=[
             Sample(
@@ -711,7 +711,7 @@ def test_render_html_seq_ref_shares_position():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="pos")),
         sequences=[
-            Sequence(id="s0", tokens=["a", "b"], n_tokens=2),
+            Sequence(id="s0", tokens=["a", "b"], ids=[1, 2], n_tokens=2),
         ],
         samples=[
             Sample(
@@ -780,7 +780,7 @@ def test_render_html_newline_in_seq_ref_inserts_line_break():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="nl_seq")),
         sequences=[
-            Sequence(id="s0", tokens=["first\n", "second"], n_tokens=2),
+            Sequence(id="s0", tokens=["first\n", "second"], ids=[1, 2], n_tokens=2),
         ],
         samples=[
             Sample(

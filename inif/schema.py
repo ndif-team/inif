@@ -3,11 +3,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from inif.models import InifDocument
+from inif.models import InifDocument, TokenExtras
 
 
 def get_schema() -> dict:
-    return InifDocument.model_json_schema()
+    """Return the inif JSON schema, with conventional Token extras documented.
+
+    The ``Token`` model permits arbitrary extra fields. ``TokenExtras`` is
+    embedded under ``$defs`` purely as documentation of well-known names
+    (``tags``, ``role``, ``logprob``, ``logit_lens``) so external validators,
+    UIs, and viewers know what to expect.
+    """
+    schema = InifDocument.model_json_schema()
+    defs = schema.setdefault("$defs", {})
+    defs["TokenExtras"] = TokenExtras.model_json_schema()
+    return schema
 
 
 def validate(data: dict) -> None:

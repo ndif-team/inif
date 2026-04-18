@@ -36,6 +36,7 @@
         "created_at": {
           "anyOf": [
             {
+              "format": "date-time",
               "type": "string"
             },
             {
@@ -44,18 +45,6 @@
           ],
           "default": null,
           "title": "Created At"
-        },
-        "total_samples": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Total Samples"
         },
         "total_time": {
           "anyOf": [
@@ -131,15 +120,8 @@
     "Sample": {
       "properties": {
         "id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "integer"
-            }
-          ],
-          "title": "Id"
+          "title": "Id",
+          "type": "string"
         },
         "tokens": {
           "items": {
@@ -303,11 +285,30 @@
           "title": "Id",
           "type": "string"
         },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
         "tokens": {
           "items": {
             "type": "string"
           },
           "title": "Tokens",
+          "type": "array"
+        },
+        "ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Ids",
           "type": "array"
         },
         "n_tokens": {
@@ -330,6 +331,7 @@
       "required": [
         "id",
         "tokens",
+        "ids",
         "n_tokens"
       ],
       "title": "Sequence",
@@ -481,6 +483,61 @@
         "id"
       ],
       "title": "Token",
+      "type": "object"
+    },
+    "TokenExtras": {
+      "description": "Conventional extra fields recognized by inif tooling.\n\nTokens accept arbitrary extras (``model_config[\"extra\"] = \"allow\"``); this\nmodel documents the well-known names so external validators, viewers, and\nconverters know what to expect. Not used at runtime \u2014 it only contributes\nto the JSON schema as a ``$defs`` entry.\n\nConventional ``role`` values: ``\"system\"``, ``\"user\"``, ``\"assistant\"``,\n``\"template\"``.\n\nConventional tags include: ``\"generated\"`` (model-produced),\n``\"special\"`` (special tokenizer ids), ``\"number\"``, ``\"entity\"``.",
+      "properties": {
+        "tags": {
+          "description": "User-assigned labels",
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Chat-template role: system | user | assistant | template",
+          "title": "Role"
+        },
+        "logprob": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-token log-probability from the model",
+          "title": "Logprob"
+        },
+        "logit_lens": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-layer logit-lens output keyed by layer name",
+          "title": "Logit Lens"
+        }
+      },
+      "title": "TokenExtras",
       "type": "object"
     }
   },

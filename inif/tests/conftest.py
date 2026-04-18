@@ -40,7 +40,6 @@ def metadata(model_info, source_eval):
         packages={"inif": "0.1.0"},
         source_eval=source_eval,
         created_at="2025-01-01T00:00:00Z",
-        total_samples=2,
     )
 
 
@@ -50,11 +49,13 @@ def sequences():
         Sequence(
             id="seq_0",
             tokens=["<|endoftext|>", "This", " is"],
+            ids=[50256, 1212, 318],
             n_tokens=3,
         ),
         Sequence(
             id="seq_1",
             tokens=["<|endoftext|>"],
+            ids=[50256],
             n_tokens=1,
         ),
     ]
@@ -63,16 +64,14 @@ def sequences():
 @pytest.fixture
 def sample_tokens():
     tok_content = Token(id=1332, token=" test")
-    tok_content.__dict__["tags"] = ["content"]
-    if tok_content.model_extra is not None:
-        tok_content.model_extra["tags"] = ["content"]
+    tok_content.add_tag("content")
 
-    tok_data = Token(id=764, token=".")
-    tok_data.__dict__["logprob"] = -0.5
-    tok_data.__dict__["data"] = {"logit_lens": {"layer_5": {"top_token": "."}}}
-    if tok_data.model_extra is not None:
-        tok_data.model_extra["logprob"] = -0.5
-        tok_data.model_extra["data"] = {"logit_lens": {"layer_5": {"top_token": "."}}}
+    tok_data = Token(
+        id=764,
+        token=".",
+        logprob=-0.5,
+        data={"logit_lens": {"layer_5": {"top_token": "."}}},
+    )
 
     return [
         Token(id=-1, sequence_id="seq_0"),  # ref to seq 0

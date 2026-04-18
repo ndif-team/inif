@@ -2,6 +2,8 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from inif.io import from_dict, load, save, to_dict
 from inif.models import (
     InifDocument,
@@ -89,9 +91,7 @@ def test_save_force_compress(doc):
 def test_save_load_preserves_extra_fields():
     """Verify extra fields on Token survive round-trip serialization."""
     tok = Token(id=1, token="hello", role="user", logprob=-0.5)
-    tok.__dict__["data"] = {"logit_lens": {"layer_0": {}}}
-    if tok.model_extra is not None:
-        tok.model_extra["data"] = {"logit_lens": {"layer_0": {}}}
+    tok.set_extra("data", {"logit_lens": {"layer_0": {}}})
 
     from inif.models import Sample
 
@@ -106,9 +106,51 @@ def test_save_load_preserves_extra_fields():
         doc2 = load(path)
 
         t = doc2.samples[0].tokens[0]
-        assert t.model_extra["role"] == "user"
-        assert t.model_extra["logprob"] == -0.5
-        assert t.model_extra["data"]["logit_lens"]["layer_0"] == {}
+        assert t.get_extra("role") == "user"
+        assert t.get_extra("logprob") == -0.5
+        assert t.get_extra("data")["logit_lens"]["layer_0"] == {}
+
+
+def test_sequence_ids_survive_save_load(doc):
+    """Sequence.ids must round-trip through save/load — losing them would
+    corrupt every expanded token's vocabulary id."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "test.inif.json"
+        save(doc, path)
+        doc2 = load(path)
+
+    for s_orig, s_reload in zip(doc.sequences, doc2.sequences):
+        assert s_reload.ids == s_orig.ids
+        assert s_reload.tokens == s_orig.tokens
+
+
+def test_load_with_explicit_compress_override(doc):
+    """`load` accepts a `compress` override mirroring `save`."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Save gzipped to a non-suffixed path.
+        path = Path(tmpdir) / "blob"
+        save(doc, path, compress=True)
+        # Without the hint, load tries plain JSON and chokes.
+        import gzip as _gzip
+
+        with pytest.raises(
+            (UnicodeDecodeError, json.JSONDecodeError, _gzip.BadGzipFile)
+        ):
+            load(path)
+        # With the explicit override it works.
+        doc2 = load(path, compress=True)
+        assert doc2.metadata.model.name == doc.metadata.model.name
+
+
+def test_save_load_compress_false_override(doc):
+    """`compress=False` forces plain text even on a .gz path."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "test.json.gz"
+        save(doc, path, compress=False)
+        # File is plain JSON despite the suffix.
+        assert path.read_text(encoding="utf-8").startswith("{")
+        doc2 = load(path, compress=False)
+        assert doc2.metadata.model.name == doc.metadata.model.name
 
 
 def test_minimal_document():
@@ -118,3 +160,15 @@ def test_minimal_document():
     assert doc2.metadata.model.name == "test"
     assert doc2.samples == []
     assert doc2.sequences == []
+
+
+def test_schema_documents_token_extras():
+    """The generated JSON schema embeds TokenExtras under $defs so external
+    validators / UIs can discover the conventional Token extra fields."""
+    from inif.schema import get_schema
+
+    schema = get_schema()
+    assert "TokenExtras" in schema["$defs"]
+    extras_props = schema["$defs"]["TokenExtras"]["properties"]
+    for key in ("tags", "role", "logprob", "logit_lens"):
+        assert key in extras_props, f"Missing conventional extra: {key}"

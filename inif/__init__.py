@@ -9,12 +9,13 @@ from inif.models import (
     SourceEval,
     Span,
     Token,
+    TokenExtras,
 )
 from inif.schema import get_schema, validate, write_schema
 from inif.selectors import (
     TokenSelection,
+    filter_samples_by_score,
     select_by_position,
-    select_by_score,
     select_by_sequence_id,
     select_by_span,
     select_by_tag,
@@ -48,6 +49,7 @@ __all__ = [
     "SourceEval",
     "Span",
     "Token",
+    "TokenExtras",
     # IO
     "from_dict",
     "load",
@@ -59,8 +61,8 @@ __all__ = [
     "write_schema",
     # Selectors
     "TokenSelection",
+    "filter_samples_by_score",
     "select_by_position",
-    "select_by_score",
     "select_by_sequence_id",
     "select_by_span",
     "select_by_tag",

@@ -7,8 +7,8 @@ from inif.models import (
     Token,
 )
 from inif.selectors import (
+    filter_samples_by_score,
     select_by_position,
-    select_by_score,
     select_by_sequence_id,
     select_by_span,
     select_by_tag,
@@ -61,7 +61,7 @@ def test_select_by_span_no_match(sample):
     assert len(sel.tokens) == 0
 
 
-def test_select_by_score():
+def test_filter_samples_by_score():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="test")),
         samples=[
@@ -83,9 +83,12 @@ def test_select_by_score():
         ],
     )
 
-    results = select_by_score(doc, "acc", lambda v: v == 1.0)
+    results = filter_samples_by_score(doc, "acc", lambda v: v == 1.0)
     assert len(results) == 1
-    assert results[0].sample_id == "s0"
+    assert results[0].id == "s0"
+    # Returned objects are Samples; composing with position selectors works.
+    sel = select_by_position(results[0], 0)
+    assert sel.tokens[0].token == "a"
 
-    results = select_by_score(doc, "acc", lambda v: v >= 0.0)
-    assert len(results) == 2
+    results = filter_samples_by_score(doc, "acc", lambda v: v >= 0.0)
+    assert [s.id for s in results] == ["s0", "s1"]

@@ -197,7 +197,7 @@ def test_from_eval_log_basic():
     doc = from_eval_log(log, deduplicate=False)
     assert doc.metadata.model.name == "gpt2"
     assert doc.metadata.source_eval.framework == "inspect_ai"
-    assert doc.metadata.total_samples == 1
+    assert doc.total_samples == 1
     assert doc.metadata.total_time == 60.0
 
     s = doc.samples[0]
@@ -212,7 +212,7 @@ def test_from_eval_log_basic():
 def test_from_eval_log_no_samples():
     log = _make_eval_log(samples=[])
     doc = from_eval_log(log, deduplicate=False)
-    assert doc.metadata.total_samples == 0
+    assert doc.total_samples == 0
     assert len(doc.samples) == 0
 
 
@@ -305,6 +305,147 @@ def test_from_eval_log_chat_roles():
     assert "user" in roles
     assert "assistant" in roles
     assert "template" in roles
+
+
+def _chat_tokenizer():
+    """Char-level chat tokenizer used by the generated/logprob tests."""
+
+    class ChatTokenizer:
+        def apply_chat_template(
+            self,
+            messages,
+            tokenize=True,
+            add_generation_prompt=False,
+            return_dict=False,
+            **kwargs,
+        ):
+            parts = ["<s>"]
+            for msg in messages:
+                parts.append(f"[{msg['role']}]")
+                parts.append(msg["content"])
+                parts.append(f"[/{msg['role']}]")
+            formatted = "".join(parts)
+            if not tokenize:
+                return formatted
+            return [ord(c) for c in formatted]
+
+        def decode(self, ids, skip_special_tokens=False):
+            return "".join(chr(i) for i in ids)
+
+    return ChatTokenizer()
+
+
+def test_from_eval_log_tags_generated_tokens():
+    """Tokens belonging to the LAST assistant message get a 'generated' tag."""
+    messages = [
+        _make_message("user", "Hi"),
+        _make_message("assistant", "Hello!"),
+    ]
+    sample = _make_sample(messages, sample_id="q1")
+    log = _make_eval_log(samples=[sample])
+
+    doc = from_eval_log(
+        log,
+        tokenizer=_chat_tokenizer(),
+        deduplicate=False,
+        tag_chat_roles=False,
+        tag_generated=True,
+    )
+    tagged = [t for t in doc.samples[0].tokens if t.has_tag("generated")]
+    # "Hello!" = 6 chars = 6 tokens
+    assert len(tagged) == 6
+    assert "".join(t.token for t in tagged) == "Hello!"
+    # Tokens from earlier (template, user message) are NOT tagged.
+    assert not any(
+        t.has_tag("generated")
+        for t in doc.samples[0].tokens
+        if t.token not in {"H", "e", "l", "o", "!"} or t not in tagged
+    )
+
+
+def test_from_eval_log_tag_generated_disabled():
+    messages = [
+        _make_message("user", "Hi"),
+        _make_message("assistant", "Hello!"),
+    ]
+    sample = _make_sample(messages, sample_id="q1")
+    log = _make_eval_log(samples=[sample])
+
+    doc = from_eval_log(
+        log,
+        tokenizer=_chat_tokenizer(),
+        deduplicate=False,
+        tag_chat_roles=False,
+        tag_generated=False,
+    )
+    assert all(not t.has_tag("generated") for t in doc.samples[0].tokens)
+
+
+def test_from_eval_log_attaches_logprobs():
+    """When inspect's output carries per-token logprobs whose count matches
+    the assistant token range, attach them to those tokens."""
+    messages = [
+        _make_message("user", "Hi"),
+        _make_message("assistant", "Hello!"),
+    ]
+    # 6 logprob entries to match "Hello!" → 6 char tokens
+    logprob_items = [SimpleNamespace(logprob=-0.1 * (i + 1)) for i in range(6)]
+    output = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                logprobs=SimpleNamespace(content=logprob_items),
+            )
+        ]
+    )
+    sample = _make_sample(messages, sample_id="q1")
+    sample.output = output
+    log = _make_eval_log(samples=[sample])
+
+    doc = from_eval_log(
+        log,
+        tokenizer=_chat_tokenizer(),
+        deduplicate=False,
+        tag_chat_roles=False,
+        tag_generated=True,
+        extract_logprobs=True,
+    )
+    generated = [t for t in doc.samples[0].tokens if t.has_tag("generated")]
+    assert len(generated) == 6
+    expected = [-0.1 * (i + 1) for i in range(6)]
+    assert [t.get_extra("logprob") for t in generated] == expected
+    # Non-response tokens have no logprob attached.
+    others = [t for t in doc.samples[0].tokens if not t.has_tag("generated")]
+    assert all(not t.has_extra("logprob") for t in others)
+
+
+def test_from_eval_log_logprobs_skipped_on_count_mismatch():
+    """If logprob count doesn't match the response token count, attachment is
+    silently skipped — but the 'generated' tag still applies."""
+    messages = [
+        _make_message("user", "Hi"),
+        _make_message("assistant", "Hello!"),
+    ]
+    # Wrong count (3 vs 6 chars)
+    logprob_items = [SimpleNamespace(logprob=-0.5) for _ in range(3)]
+    output = SimpleNamespace(
+        choices=[SimpleNamespace(logprobs=SimpleNamespace(content=logprob_items))]
+    )
+    sample = _make_sample(messages, sample_id="q1")
+    sample.output = output
+    log = _make_eval_log(samples=[sample])
+
+    doc = from_eval_log(
+        log,
+        tokenizer=_chat_tokenizer(),
+        deduplicate=False,
+        tag_chat_roles=False,
+        tag_generated=True,
+        extract_logprobs=True,
+    )
+    # Generated tag still applied
+    assert any(t.has_tag("generated") for t in doc.samples[0].tokens)
+    # No logprobs attached
+    assert all(not t.has_extra("logprob") for t in doc.samples[0].tokens)
 
 
 def test_from_eval_log_usage():

@@ -13,6 +13,7 @@ def test_deduplicate_basic(doc_for_dedup):
     assert len(deduped.sequences) == 1
     seq = deduped.sequences[0]
     assert seq.tokens == ["<|endoftext|>", "This", " is"]
+    assert seq.ids == [50256, 1212, 318]
     assert seq.n_tokens == 3
     # Each sample should now start with a ref token
     for sample in deduped.samples:
@@ -38,6 +39,10 @@ def test_roundtrip_dedup_expand(doc_for_dedup):
         orig_strs = [t.token for t in orig.tokens]
         exp_strs = [t.token for t in exp.tokens]
         assert orig_strs == exp_strs
+        # Original ids must be preserved through dedup → expand round-trip.
+        orig_ids = [t.id for t in orig.tokens]
+        exp_ids = [t.id for t in exp.tokens]
+        assert orig_ids == exp_ids
 
 
 def test_dedup_preserves_extra_field_tokens():
@@ -108,16 +113,58 @@ def test_expand_preserves_non_ref_tokens():
     assert expanded.samples[0].tokens[0].id == 1
 
 
+def test_dedup_skips_window_with_mismatched_ids():
+    """If two samples share the same token strings but disagree on ids
+    (rare, but possible across tokenizer quirks), the window with the wrong
+    ids must NOT be collapsed — otherwise expansion would corrupt that
+    sample's ids."""
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="test")),
+        samples=[
+            Sample(
+                id="s0",
+                tokens=[
+                    Token(id=10, token="a"),
+                    Token(id=20, token="b"),
+                    Token(id=30, token="c"),
+                    Token(id=99, token="x"),
+                ],
+            ),
+            Sample(
+                id="s1",
+                tokens=[
+                    Token(id=10, token="a"),
+                    # Same string "b" but DIFFERENT id; must block replacement.
+                    Token(id=21, token="b"),
+                    Token(id=30, token="c"),
+                    Token(id=88, token="y"),
+                ],
+            ),
+        ],
+    )
+    deduped = deduplicate_sequences(doc, min_length=3)
+    # Sequence is created from sample 0's ids.
+    assert len(deduped.sequences) == 1
+    assert deduped.sequences[0].ids == [10, 20, 30]
+    # Sample 0 collapses cleanly.
+    assert deduped.samples[0].tokens[0].is_sequence_ref
+    # Sample 1 keeps its original tokens (its middle id doesn't match).
+    assert [t.id for t in deduped.samples[1].tokens] == [10, 21, 30, 88]
+    assert all(not t.is_sequence_ref for t in deduped.samples[1].tokens)
+
+
 def test_expanded_tokens_have_sequence_id(doc_for_dedup):
-    """Expanded tokens should carry the sequence_id they came from."""
+    """Expanded tokens should carry the sequence_id they came from
+    AND keep their original token ids."""
     deduped = deduplicate_sequences(doc_for_dedup, min_length=3)
     expanded = expand_sequences(deduped)
 
     seq_id = deduped.sequences[0].id
+    expected_ids = [50256, 1212, 318]
     for sample in expanded.samples:
         # First 3 tokens came from expansion
-        for t in sample.tokens[:3]:
+        for t, expected_id in zip(sample.tokens[:3], expected_ids):
             assert t.sequence_id == seq_id
-            assert t.id == 0  # expanded tokens get id=0
+            assert t.id == expected_id
         # Last token is original, no sequence_id
         assert sample.tokens[3].sequence_id is None

@@ -64,26 +64,48 @@ _EXTRA_PALETTE = [
 _EXTRA_SKIP = {"id", "token", "sequence_id", "role", "tags"}
 
 
-def _escape(s: str) -> str:
+def _detect_newline_chars(tokenizer: Any) -> frozenset[str]:
+    """Return the set of characters that represent newlines for *tokenizer*.
+
+    Always includes the literal ``\\n``.  When a tokenizer is given its
+    byte-level representation of newline (e.g. ``Ċ`` for GPT-2 family) is
+    added automatically.
+    """
+    chars: set[str] = {"\n"}
+    if tokenizer is not None:
+        ids = tokenizer.encode("\n", add_special_tokens=False)
+        if ids:
+            tok = tokenizer.convert_ids_to_tokens(ids[0])
+            if tok and len(tok) == 1:
+                chars.add(tok)
+    return frozenset(chars)
+
+
+_DEFAULT_NL = frozenset({"\n"})
+
+
+def _escape(s: str, newline_chars: frozenset[str] = _DEFAULT_NL) -> str:
     escaped = html.escape(str(s))
     if escaped and escaped[0] == " ":
         escaped = "\u00b7" + escaped[1:]
     if len(escaped) > 1 and escaped[-1] == " ":
         escaped = escaped[:-1] + "\u00b7"
-    escaped = escaped.replace("\n", "\u21b5")
+    for ch in newline_chars:
+        escaped = escaped.replace(ch, "\u21b5")
     return escaped
 
 
-def _has_newline(tok_data: dict) -> bool:
-    """Check whether a token's text contains a newline."""
-    return "\n" in (tok_data.get("token") or "")
+def _has_newline(tok_data: dict, newline_chars: frozenset[str] = _DEFAULT_NL) -> bool:
+    """Check whether a token's text contains a newline character."""
+    text = tok_data.get("token") or ""
+    return any(ch in text for ch in newline_chars)
 
 
 def _render_css() -> str:
     return """<style>
 .inif-viewer {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    max-width: 1200px;
+    max-width: 100%;
     margin: 0 auto;
     padding: 16px;
     color: #333;
@@ -425,8 +447,9 @@ def _render_metadata_panel(doc_data: dict) -> str:
             rows.append(("Task", _escape(source_eval["task"])))
     if meta.get("created_at"):
         rows.append(("Created", _escape(meta["created_at"])))
-    if meta.get("total_samples") is not None:
-        rows.append(("Total samples", str(meta["total_samples"])))
+    n_samples = len(doc_data.get("samples", []))
+    if n_samples:
+        rows.append(("Total samples", str(n_samples)))
     if meta.get("total_time") is not None:
         rows.append(("Total time", f"{meta['total_time']:.2f}s"))
     pkgs = meta.get("packages", {})
@@ -653,6 +676,7 @@ def _render_token(
     span_positions: dict[int, str],
     seq_map: dict[str, dict],
     extra_colors: dict[str, str] | None = None,
+    newline_chars: frozenset[str] = _DEFAULT_NL,
 ) -> str:
     tok_id = tok_data.get("id", 0)
     tok_str = tok_data.get("token") or ""
@@ -725,7 +749,7 @@ def _render_token(
                 pb = 2 * len(tok_extras)
                 style_parts.append(f"padding-bottom:{pb}px")
 
-    display_text = _escape(tok_str)
+    display_text = _escape(tok_str, newline_chars)
     cls_attr = " ".join(classes)
     style_attr = f' style="{";".join(style_parts)}"' if style_parts else ""
     data_str = (" " + " ".join(data_attrs)) if data_attrs else ""
@@ -743,6 +767,7 @@ def _render_token_strip(
     sample_data: dict,
     sequences: list[dict],
     extra_colors: dict[str, str],
+    newline_chars: frozenset[str] = _DEFAULT_NL,
 ) -> str:
     seq_map = {s["id"]: s for s in sequences}
 
@@ -773,13 +798,24 @@ def _render_token_strip(
                         "sequence_id": seq_id,
                     }
                     parts.append(
-                        _render_token(sub, idx, span_positions, seq_map, extra_colors)
+                        _render_token(
+                            sub,
+                            idx,
+                            span_positions,
+                            seq_map,
+                            extra_colors,
+                            newline_chars,
+                        )
                     )
-                    if "\n" in sub_str:
+                    if any(ch in sub_str for ch in newline_chars):
                         parts.append('<div class="inif-line-break"></div>')
                 continue
-        parts.append(_render_token(tok, idx, span_positions, seq_map, extra_colors))
-        if _has_newline(tok):
+        parts.append(
+            _render_token(
+                tok, idx, span_positions, seq_map, extra_colors, newline_chars
+            )
+        )
+        if _has_newline(tok, newline_chars):
             parts.append('<div class="inif-line-break"></div>')
     parts.append("</div>")
     return "\n".join(parts)
@@ -807,8 +843,9 @@ def _render_texts_panel(sample_data: dict) -> str:
         return ""
     parts = ["<h3>Texts</h3>", '<div class="inif-texts-panel">']
     for i, text in enumerate(texts):
+        safe_text = html.escape(str(text))
         parts.append(
-            f'<div class="inif-text-item"><strong>{i}:</strong> {_escape(text)}</div>'
+            f'<div class="inif-text-item"><strong>{i}:</strong> {safe_text}</div>'
         )
     parts.append("</div>")
     return "\n".join(parts)
@@ -845,6 +882,7 @@ def _render_sample_panel(
     sample_data: dict,
     sequences: list[dict],
     compact: bool,
+    newline_chars: frozenset[str] = _DEFAULT_NL,
 ) -> str:
     tokens = sample_data.get("tokens", [])
     has_roles = _sample_has_roles(sample_data)
@@ -862,7 +900,9 @@ def _render_sample_panel(
     elif compact:
         pass  # skip empty
 
-    parts.append(_render_token_strip(sample_data, sequences, extra_colors))
+    parts.append(
+        _render_token_strip(sample_data, sequences, extra_colors, newline_chars)
+    )
 
     spans_html = _render_spans_legend(sample_data)
     if spans_html:
@@ -880,9 +920,18 @@ def _render_sample_panel(
 
 
 def render_html(
-    doc: InifDocument, compact: bool = False, title: str | None = None
+    doc: InifDocument,
+    compact: bool = False,
+    title: str | None = None,
+    tokenizer: Any = None,
 ) -> str:
-    """Render an InifDocument as a self-contained HTML string."""
+    """Render an InifDocument as a self-contained HTML string.
+
+    When *tokenizer* is provided, the tokenizer's byte-level representation
+    of newlines (e.g. ``Ċ`` for GPT-2 family) is detected automatically so
+    that visual line breaks are inserted after newline tokens.
+    """
+    newline_chars = _detect_newline_chars(tokenizer)
     doc_data = to_dict(doc, compact=False)
     display_title = title or f"inif: {doc.metadata.model.name}"
     sequences = doc_data.get("sequences", [])
@@ -912,7 +961,7 @@ def render_html(
             parts.append(
                 f'<div class="inif-sample-panel" data-sample-idx="{i}"{display}>'
             )
-            parts.append(_render_sample_panel(i, s, sequences, compact))
+            parts.append(_render_sample_panel(i, s, sequences, compact, newline_chars))
             parts.append("</div>")
         parts.append("</div>")  # inif-main
 
@@ -926,11 +975,19 @@ def render_html(
     return "\n".join(parts)
 
 
-def show(doc: InifDocument, compact: bool = False, title: str | None = None) -> Any:
-    """Display an InifDocument as HTML in a Jupyter notebook."""
+def show(
+    doc: InifDocument,
+    compact: bool = False,
+    title: str | None = None,
+    tokenizer: Any = None,
+) -> Any:
+    """Display an InifDocument as HTML in a Jupyter notebook.
+
+    Pass *tokenizer* to enable line breaks after BPE newline tokens.
+    """
     from IPython.display import HTML
 
-    return HTML(render_html(doc, compact=compact, title=title))
+    return HTML(render_html(doc, compact=compact, title=title, tokenizer=tokenizer))
 
 
 def save_html(
@@ -939,14 +996,16 @@ def save_html(
     compact: bool = False,
     title: str | None = None,
     source: str | Path | None = None,
+    tokenizer: Any = None,
 ) -> None:
     """Save an InifDocument as a self-contained HTML file.
 
     When *title* is not given, the source filename is used if available,
-    otherwise falls back to the model name.
+    otherwise falls back to the model name.  Pass *tokenizer* to enable
+    line breaks after BPE newline tokens.
     """
     path = Path(path)
     if title is None and source is not None:
         title = Path(source).name
-    html_str = render_html(doc, compact=compact, title=title)
+    html_str = render_html(doc, compact=compact, title=title, tokenizer=tokenizer)
     path.write_text(html_str, encoding="utf-8")
