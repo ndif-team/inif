@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -349,3 +350,34 @@ class InifDocument(BaseModel):
             sequences=kept_sequences,
             samples=kept_samples,
         )
+
+    def to_dict(self, compact: bool = True) -> dict:
+        """See :func:`inif.io.to_dict`."""
+        from inif.io import to_dict
+
+        return to_dict(self, compact=compact)
+
+    def save(
+        self,
+        path: str | Path,
+        compress: bool | None = None,
+        compact: bool = True,
+    ) -> None:
+        """See :func:`inif.io.save`."""
+        from inif.io import save
+
+        save(self, path, compress=compress, compact=compact)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> InifDocument:
+        """See :func:`inif.io.from_dict`."""
+        from inif.io import from_dict
+
+        return from_dict(data)
+
+    @classmethod
+    def load(cls, path: str | Path, compress: bool | None = None) -> InifDocument:
+        """See :func:`inif.io.load`."""
+        from inif.io import load
+
+        return load(path, compress=compress)

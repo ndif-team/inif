@@ -261,7 +261,6 @@ def _annotate_response_tokens(
 def from_eval_log(
     eval_log: Any,
     tokenizer: Any = None,
-    tokenizer_name: str | None = None,
     include_messages: bool = True,
     deduplicate: bool = True,
     tag_chat_roles: bool = True,
@@ -272,9 +271,10 @@ def from_eval_log(
 
     Args:
         eval_log: An inspect_ai.log.EvalLog object.
-        tokenizer: A HuggingFace tokenizer. If None and tokenizer_name is provided,
-            loads one via AutoTokenizer.
-        tokenizer_name: HuggingFace model name to load tokenizer from.
+        tokenizer: A HuggingFace tokenizer, or a model identifier string
+            (e.g. ``"openai/gpt-oss-20b"``) that will be loaded via
+            ``AutoTokenizer.from_pretrained``. If ``None``, tokenization is
+            skipped (messages still produce ``texts`` but no ``tokens``).
         include_messages: Whether to include message-level text segments.
         deduplicate: Whether to run sequence deduplication.
         tag_chat_roles: Whether to add 'role' extra field to tokens.
@@ -284,10 +284,10 @@ def from_eval_log(
             output to the response tokens (best-effort: requires the tokenizer
             and the eval-source tokenization to agree on token count).
     """
-    if tokenizer is None and tokenizer_name is not None:
+    if isinstance(tokenizer, str):
         from transformers import AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
     model_info = _extract_model_info(eval_log, tokenizer)
     source_eval = _extract_source_eval(eval_log)

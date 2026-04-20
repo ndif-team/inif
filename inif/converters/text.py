@@ -25,13 +25,13 @@ def _get_package_versions() -> dict[str, str]:
     return packages
 
 
-def _load_tokenizer(tokenizer: Any = None, tokenizer_name: str | None = None) -> Any:
-    if tokenizer is not None:
-        return tokenizer
-    assert tokenizer_name is not None, "Either tokenizer or tokenizer_name required"
-    from transformers import AutoTokenizer
+def _load_tokenizer(tokenizer: Any) -> Any:
+    assert tokenizer is not None, "tokenizer is required"
+    if isinstance(tokenizer, str):
+        from transformers import AutoTokenizer
 
-    return AutoTokenizer.from_pretrained(tokenizer_name)
+        return AutoTokenizer.from_pretrained(tokenizer)
+    return tokenizer
 
 
 def _tokenize_text(text: str, tokenizer: Any) -> tuple[list[int], list[str]]:
@@ -41,64 +41,71 @@ def _tokenize_text(text: str, tokenizer: Any) -> tuple[list[int], list[str]]:
     return ids, strings
 
 
-def _model_info_from_tokenizer(
-    tokenizer: Any, tokenizer_name: str | None = None
-) -> ModelInfo:
-    name = tokenizer_name or getattr(tokenizer, "name_or_path", "unknown")
+def _model_info_from_tokenizer(tokenizer: Any) -> ModelInfo:
+    name = getattr(tokenizer, "name_or_path", "unknown")
     revision = getattr(tokenizer, "_commit_hash", None)
     return ModelInfo(name=name, revision=revision)
 
 
+def _is_chat_input(item: Any) -> bool:
+    """A chat input is a list of ``{"role", "content"}`` dicts."""
+    return isinstance(item, list) and len(item) > 0 and isinstance(item[0], dict)
+
+
 def from_texts(
-    texts: list[str],
-    tokenizer: Any = None,
-    tokenizer_name: str | None = None,
+    texts: list[str] | list[list[dict[str, str]]],
+    tokenizer: Any,
     sample_ids: list[str] | None = None,
     min_sequence_length: int = 3,
     deduplicate: bool = True,
-    messages: list[list[dict[str, str]]] | None = None,
     tag_chat_roles: bool = False,
 ) -> InifDocument:
-    """Each text string becomes one Sample.
+    """Converts one or more inputs into ``Sample`` objects in an ``InifDocument``.
 
     Args:
-        texts: List of text strings to process.
-        tokenizer: A HuggingFace tokenizer.
-        tokenizer_name: HuggingFace model name to load tokenizer from.
+        texts: Either a list of plain strings, or a list of chat message lists
+            (``list[dict[str, str]]`` with ``"role"``/``"content"`` keys) —
+            detected per-element. Chat inputs are tokenized via
+            ``tokenizer.apply_chat_template``; plain strings via
+            ``tokenizer.encode``.
+        tokenizer: A HuggingFace tokenizer, or a model identifier string
+            (e.g. ``"openai/gpt-oss-20b"``) that will be loaded via
+            ``AutoTokenizer.from_pretrained``.
         sample_ids: Optional list of sample IDs (defaults to "sample_0", ...).
         min_sequence_length: Minimum length for common sequence detection.
-        deduplicate: Whether to run sequence deduplication.
-        messages: Optional list of message lists per sample. When provided and
-            the tokenizer supports ``apply_chat_template``, uses it instead of
-            plain ``tokenizer.encode``. ``texts[i]`` is still used for
-            ``Sample.texts``.
-        tag_chat_roles: Whether to tag tokens with chat roles after dedup.
-            Requires ``messages`` to be provided; no-op otherwise.
+        deduplicate: Whether to run sequence deduplication. Default: True.
+        tag_chat_roles: Whether to tag chat-input tokens with roles after dedup.
+            No-op for plain-string inputs.
     """
-    tok = _load_tokenizer(tokenizer, tokenizer_name)
-    model_info = _model_info_from_tokenizer(tok, tokenizer_name)
+    tok = _load_tokenizer(tokenizer)
+    model_info = _model_info_from_tokenizer(tok)
 
     samples = []
-    for i, text in enumerate(texts):
+    chat_messages: list[list[dict[str, str]] | None] = []
+    for i, item in enumerate(texts):
         sid = sample_ids[i] if sample_ids else f"sample_{i}"
-        if messages is not None and hasattr(tok, "apply_chat_template"):
+        if _is_chat_input(item):
+            assert hasattr(tok, "apply_chat_template"), (
+                "tokenizer must support apply_chat_template for chat inputs"
+            )
             token_ids = tok.apply_chat_template(
-                messages[i],
+                item,
                 tokenize=True,
                 add_generation_prompt=False,
                 return_dict=False,
             )
             tokens = [
-                Token(
-                    id=tid,
-                    token=tok.decode([tid], skip_special_tokens=False),
-                )
+                Token(id=tid, token=tok.decode([tid], skip_special_tokens=False))
                 for tid in token_ids
             ]
+            sample_texts = [msg["content"] for msg in item]
+            chat_messages.append(item)
         else:
-            ids, strings = _tokenize_text(text, tok)
+            ids, strings = _tokenize_text(item, tok)
             tokens = [Token(id=tid, token=tstr) for tid, tstr in zip(ids, strings)]
-        samples.append(Sample(id=sid, tokens=tokens, texts=[text]))
+            sample_texts = [item]
+            chat_messages.append(None)
+        samples.append(Sample(id=sid, tokens=tokens, texts=sample_texts))
 
     metadata = Metadata(
         model=model_info,
@@ -111,18 +118,19 @@ def from_texts(
     if deduplicate:
         doc = deduplicate_sequences(doc, min_length=min_sequence_length)
 
-    if tag_chat_roles and messages is not None:
-        from inif.tagging import tag_chat_roles_doc
+    if tag_chat_roles and any(m is not None for m in chat_messages):
+        from inif.tagging import tag_chat_roles as _tag_chat_roles
 
-        tag_chat_roles_doc(doc, messages, tok)
+        for sample, msgs in zip(doc.samples, chat_messages):
+            if msgs is not None:
+                _tag_chat_roles(sample, msgs, tok, doc.sequences or None)
 
     return doc
 
 
 def from_text_files(
     paths: list[str | Path],
-    tokenizer: Any = None,
-    tokenizer_name: str | None = None,
+    tokenizer: Any,
     min_sequence_length: int = 3,
     deduplicate: bool = True,
 ) -> InifDocument:
@@ -130,8 +138,9 @@ def from_text_files(
 
     Args:
         paths: List of file paths to process.
-        tokenizer: A HuggingFace tokenizer.
-        tokenizer_name: HuggingFace model name to load tokenizer from.
+        tokenizer: A HuggingFace tokenizer, or a model identifier string
+            (e.g. ``"openai/gpt-oss-20b"``) that will be loaded via
+            ``AutoTokenizer.from_pretrained``.
         min_sequence_length: Minimum length for common sequence detection.
         deduplicate: Whether to run sequence deduplication.
     """
@@ -145,7 +154,6 @@ def from_text_files(
     doc = from_texts(
         texts,
         tokenizer=tokenizer,
-        tokenizer_name=tokenizer_name,
         sample_ids=sample_ids,
         min_sequence_length=min_sequence_length,
         deduplicate=deduplicate,

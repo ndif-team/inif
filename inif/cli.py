@@ -25,7 +25,7 @@ def _convert_txt(args: argparse.Namespace) -> None:
 
     doc = from_text_files(
         paths=input_paths,
-        tokenizer_name=args.model,
+        tokenizer=args.model,
         min_sequence_length=args.min_seq_length,
         deduplicate=not args.no_dedup,
     )
@@ -74,7 +74,7 @@ def _convert_eval(args: argparse.Namespace) -> None:
             "tag_chat_roles": not args.no_tag_chat_roles,
         }
         if args.model:
-            kwargs["tokenizer_name"] = args.model
+            kwargs["tokenizer"] = args.model
 
         doc = from_eval_file(inp, **kwargs)
 

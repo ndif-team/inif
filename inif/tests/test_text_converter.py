@@ -74,10 +74,9 @@ def test_from_texts_metadata():
     doc = from_texts(
         ["hello"],
         tokenizer=tokenizer,
-        tokenizer_name="test-model",
         deduplicate=False,
     )
-    assert doc.metadata.model.name == "test-model"
+    assert doc.metadata.model.name == "mock-model"
     assert doc.metadata.model.revision == "abc123"
     assert doc.total_samples == 1
 
@@ -137,24 +136,22 @@ class ChatMockTokenizer:
 
 
 def test_from_texts_with_messages():
-    """from_texts with messages parameter uses apply_chat_template and tags roles."""
+    """from_texts auto-detects chat inputs, uses apply_chat_template and tags roles."""
     tokenizer = ChatMockTokenizer()
     messages = [
         [{"role": "user", "content": "Hi"}],
         [{"role": "user", "content": "Bye"}],
     ]
-    texts = ["Hi", "Bye"]
 
     doc = from_texts(
-        texts,
+        messages,
         tokenizer=tokenizer,
-        messages=messages,
         tag_chat_roles=True,
         deduplicate=False,
     )
 
     assert len(doc.samples) == 2
-    # texts should be preserved
+    # texts should come from message contents
     assert doc.samples[0].texts == ["Hi"]
     assert doc.samples[1].texts == ["Bye"]
 

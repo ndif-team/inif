@@ -28,7 +28,7 @@ from inif.converters.text import from_texts
 
 doc = from_texts(
     ["The capital of France is Paris.", "Hello world!"],
-    tokenizer_name="gpt2",
+    tokenizer="gpt2",
 )
 save(doc, "traces.inif.json")
 ```
