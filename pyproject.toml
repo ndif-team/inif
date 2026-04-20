@@ -35,6 +35,17 @@ dev = [
     "ty",
     "build",
     "pre-commit",
+    {include-group = "doc"}
+]
+doc = [
+    "jupyter",
+    "panflute",
+    "markdown",
+    "griffe>=2",
+    "pyyaml",
+    "types-PyYAML",
+    "rich",
+    "quarto-cli>=1.7",
 ]
 
 [tool.setuptools]

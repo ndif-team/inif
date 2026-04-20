@@ -1,0 +1,11 @@
+project:
+  type: meridianlabs-ai/inspect-docs
+
+inspect-docs:
+  title: "INIF"
+  description: "Interpretability Interchange Format"
+  url: https://inif.ndif.us
+  repo: ndif-team/inif
+  org: National Deep Inference Fabric
+
+
