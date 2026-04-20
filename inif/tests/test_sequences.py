@@ -12,8 +12,8 @@ def test_deduplicate_basic(doc_for_dedup):
     deduped = deduplicate_sequences(doc_for_dedup, min_length=3)
     assert len(deduped.sequences) == 1
     seq = deduped.sequences[0]
-    assert seq.tokens == ["<|endoftext|>", "This", " is"]
-    assert seq.ids == [50256, 1212, 318]
+    assert [t.token for t in seq.tokens] == ["<|endoftext|>", "This", " is"]
+    assert [t.id for t in seq.tokens] == [50256, 1212, 318]
     assert seq.n_tokens == 3
     # Each sample should now start with a ref token
     for sample in deduped.samples:
@@ -145,7 +145,7 @@ def test_dedup_skips_window_with_mismatched_ids():
     deduped = deduplicate_sequences(doc, min_length=3)
     # Sequence is created from sample 0's ids.
     assert len(deduped.sequences) == 1
-    assert deduped.sequences[0].ids == [10, 20, 30]
+    assert [t.id for t in deduped.sequences[0].tokens] == [10, 20, 30]
     # Sample 0 collapses cleanly.
     assert deduped.samples[0].tokens[0].is_sequence_ref
     # Sample 1 keeps its original tokens (its middle id doesn't match).

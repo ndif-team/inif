@@ -294,9 +294,8 @@ def test_tag_chat_roles_with_sequences():
     all_tokens = [Token(id=tid, token=chr(tid)) for tid in formatted]
 
     # Simulate dedup: "<s>[user]" (first 9 chars) becomes a sequence
-    seq_tokens = [t.token for t in all_tokens[:9]]
-    seq_ids = [t.id for t in all_tokens[:9]]
-    seq = Sequence(id="seq_0", tokens=seq_tokens, ids=seq_ids, n_tokens=len(seq_tokens))
+    seq_toks = [Token(id=t.id, token=t.token) for t in all_tokens[:9]]
+    seq = Sequence(id="seq_0", n_tokens=len(seq_toks), tokens=seq_toks)
     # Sample has: ref + "H" + "i" + "[" + "/" + "u" + "s" + "e" + "r" + "]"
     sample_tokens = [Token(id=-1, sequence_id="seq_0")] + [
         Token(id=t.id, token=t.token) for t in all_tokens[9:]

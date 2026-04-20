@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 
 class ModelInfo(BaseModel):
@@ -36,38 +36,19 @@ class Metadata(BaseModel):
     extra: dict = Field(default_factory=dict)
 
 
-class Sequence(BaseModel):
-    id: str
-    name: str | None = None
-    tokens: list[str]
-    ids: list[int]
-    n_tokens: int
-    text: str | None = None
-
-    @model_validator(mode="after")
-    def _validate_sequence(self) -> Sequence:
-        assert self.n_tokens == len(self.tokens), (
-            f"n_tokens must equal len(tokens), "
-            f"got {self.n_tokens} and {len(self.tokens)}"
-        )
-        assert len(self.ids) == len(self.tokens), (
-            f"ids and tokens must have the same length, "
-            f"got {len(self.ids)} and {len(self.tokens)}"
-        )
-        return self
-
-    @property
-    def display_name(self) -> str:
-        """Human-facing label: ``name`` if set, else ``id``."""
-        return self.name or self.id
-
-
 class Token(BaseModel):
     model_config = {"extra": "allow", "arbitrary_types_allowed": True}
 
-    id: int
+    # Declaration order drives serialization order: ``token`` / ``seq_id``
+    # first, ``id`` last — so a rendered token dict reads left-to-right as
+    # ``{"token": "...", "id": N}`` or ``{"seq_id": "...", "id": -1}``.
     token: str | None = None
-    sequence_id: str | None = None
+    sequence_id: str | None = Field(
+        default=None,
+        serialization_alias="seq_id",
+        validation_alias=AliasChoices("seq_id", "sequence_id"),
+    )
+    id: int
 
     @model_validator(mode="after")
     def _validate_token(self) -> Token:
@@ -168,9 +149,23 @@ class Token(BaseModel):
         assert self.sequence_id in seq_map, f"Sequence '{self.sequence_id}' not found"
         seq = seq_map[self.sequence_id]
         return [
-            Token(id=tid, token=tstr, sequence_id=seq.id)
-            for tid, tstr in zip(seq.ids, seq.tokens)
+            Token(id=t.id, token=t.token, sequence_id=seq.id) for t in seq.tokens
         ]
+
+
+class Sequence(BaseModel):
+    id: str
+    n_tokens: int
+    tokens: list[Token]
+    text: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_sequence(self) -> Sequence:
+        assert self.n_tokens == len(self.tokens), (
+            f"n_tokens must equal len(tokens), "
+            f"got {self.n_tokens} and {len(self.tokens)}"
+        )
+        return self
 
 
 class Span(BaseModel):
@@ -258,12 +253,12 @@ class Sample(BaseModel):
                     f"Sequence '{tok.sequence_id}' not found"
                 )
                 seq = seq_map[tok.sequence_id]
-                n = len(seq.ids)
+                n = seq.n_tokens
                 if current <= expanded_position < current + n:
                     offset = expanded_position - current
                     expanded = [
-                        Token(id=tid, token=tstr, sequence_id=seq.id)
-                        for tid, tstr in zip(seq.ids, seq.tokens)
+                        Token(id=t.id, token=t.token, sequence_id=seq.id)
+                        for t in seq.tokens
                     ]
                     self.tokens = self.tokens[:i] + expanded + self.tokens[i + 1 :]
                     return i + offset, self.tokens[i + offset]
@@ -362,11 +357,12 @@ class InifDocument(BaseModel):
         path: str | Path,
         compress: bool | None = None,
         compact: bool = True,
+        indent: int | None = 4,
     ) -> None:
         """See :func:`inif.io.save`."""
         from inif.io import save
 
-        save(self, path, compress=compress, compact=compact)
+        save(self, path, compress=compress, compact=compact, indent=indent)
 
     @classmethod
     def from_dict(cls, data: dict) -> InifDocument:

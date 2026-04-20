@@ -61,7 +61,7 @@ _EXTRA_PALETTE = [
 ]
 
 # Token dict keys that do NOT produce an underline
-_EXTRA_SKIP = {"id", "token", "sequence_id", "role", "tags"}
+_EXTRA_SKIP = {"id", "token", "seq_id", "sequence_id", "role", "tags"}
 
 
 def _detect_newline_chars(tokenizer: Any) -> frozenset[str]:
@@ -680,11 +680,11 @@ def _render_token(
 ) -> str:
     tok_id = tok_data.get("id", 0)
     tok_str = tok_data.get("token") or ""
-    seq_id = tok_data.get("sequence_id")
+    seq_id = tok_data.get("seq_id") or tok_data.get("sequence_id")
     is_ref = tok_id < 0
 
-    # Extra fields for tooltip (exclude id, token, sequence_id)
-    skip = ("id", "token", "sequence_id")
+    # Extra fields for tooltip (exclude id, token, seq_id/sequence_id)
+    skip = ("id", "token", "seq_id", "sequence_id")
     extra = {k: v for k, v in tok_data.items() if k not in skip}
     tooltip_json = html.escape(json.dumps(extra, default=str), quote=True)
 
@@ -724,7 +724,9 @@ def _render_token(
             # Not expanded by caller — show concatenated fallback
             if seq_id and seq_id in seq_map:
                 seq_toks = seq_map[seq_id].get("tokens", [])
-                tok_str = "".join(seq_toks) or f"[{seq_id}]"
+                tok_str = "".join(t.get("token") or "" for t in seq_toks) or (
+                    f"[{seq_id}]"
+                )
             else:
                 tok_str = f"[{seq_id or '?'}]"
 
@@ -786,16 +788,17 @@ def _render_token_strip(
     parts = [f'<div class="inif-token-strip" data-has-roles="{hr}">']
     for idx, tok in enumerate(tokens):
         tok_id = tok.get("id", 0)
-        seq_id = tok.get("sequence_id")
+        seq_id = tok.get("seq_id") or tok.get("sequence_id")
         # Expand sequence refs into individual wrappable tokens
         if tok_id < 0 and seq_id and seq_id in seq_map:
             seq_toks = seq_map[seq_id].get("tokens", [])
             if seq_toks:
-                for sub_str in seq_toks:
+                for sub_tok in seq_toks:
+                    sub_str = sub_tok.get("token") or ""
                     sub = {
                         "id": tok_id,
                         "token": sub_str,
-                        "sequence_id": seq_id,
+                        "seq_id": seq_id,
                     }
                     parts.append(
                         _render_token(

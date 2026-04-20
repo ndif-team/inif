@@ -647,7 +647,13 @@ def test_render_html_seq_ref_expanded_into_individual_tokens():
         metadata=Metadata(model=ModelInfo(name="seq_exp")),
         sequences=[
             Sequence(
-                id="s0", tokens=["Hello", " world", "!"], ids=[1, 2, 3], n_tokens=3
+                id="s0",
+                n_tokens=3,
+                tokens=[
+                    Token(id=1, token="Hello"),
+                    Token(id=2, token=" world"),
+                    Token(id=3, token="!"),
+                ],
             ),
         ],
         samples=[
@@ -675,7 +681,11 @@ def test_render_html_seq_ref_wraps_like_normal_tokens():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="wrap")),
         sequences=[
-            Sequence(id="s0", tokens=["a", "b"], ids=[1, 2], n_tokens=2),
+            Sequence(
+                id="s0",
+                n_tokens=2,
+                tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+            ),
         ],
         samples=[
             Sample(
@@ -711,7 +721,11 @@ def test_render_html_seq_ref_shares_position():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="pos")),
         sequences=[
-            Sequence(id="s0", tokens=["a", "b"], ids=[1, 2], n_tokens=2),
+            Sequence(
+                id="s0",
+                n_tokens=2,
+                tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+            ),
         ],
         samples=[
             Sample(
@@ -780,7 +794,14 @@ def test_render_html_newline_in_seq_ref_inserts_line_break():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="nl_seq")),
         sequences=[
-            Sequence(id="s0", tokens=["first\n", "second"], ids=[1, 2], n_tokens=2),
+            Sequence(
+                id="s0",
+                n_tokens=2,
+                tokens=[
+                    Token(id=1, token="first\n"),
+                    Token(id=2, token="second"),
+                ],
+            ),
         ],
         samples=[
             Sample(

@@ -48,15 +48,17 @@ def sequences():
     return [
         Sequence(
             id="seq_0",
-            tokens=["<|endoftext|>", "This", " is"],
-            ids=[50256, 1212, 318],
             n_tokens=3,
+            tokens=[
+                Token(id=50256, token="<|endoftext|>"),
+                Token(id=1212, token="This"),
+                Token(id=318, token=" is"),
+            ],
         ),
         Sequence(
             id="seq_1",
-            tokens=["<|endoftext|>"],
-            ids=[50256],
             n_tokens=1,
+            tokens=[Token(id=50256, token="<|endoftext|>")],
         ),
     ]
 

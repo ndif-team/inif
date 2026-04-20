@@ -22,23 +22,21 @@ def test_model_info_defaults():
 
 def test_sequence_validation_n_tokens():
     with pytest.raises(ValidationError, match="n_tokens must equal"):
-        Sequence(id="s0", tokens=["a", "b"], ids=[1, 2], n_tokens=1)
-
-
-def test_sequence_validation_ids_length():
-    with pytest.raises(ValidationError, match="ids and tokens must have the same"):
-        Sequence(id="s0", tokens=["a", "b"], ids=[1], n_tokens=2)
+        Sequence(
+            id="s0",
+            tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+            n_tokens=1,
+        )
 
 
 def test_sequence_valid():
     s = Sequence(
         id="seq_0",
-        tokens=["hello", " world"],
-        ids=[1, 2],
         n_tokens=2,
+        tokens=[Token(id=1, token="hello"), Token(id=2, token=" world")],
     )
     assert len(s.tokens) == 2
-    assert s.ids == [1, 2]
+    assert [t.id for t in s.tokens] == [1, 2]
     assert s.id == "seq_0"
 
 
@@ -277,8 +275,8 @@ def test_document_subset_filters_and_prunes_sequences():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="t")),
         sequences=[
-            Sequence(id="s_keep", tokens=["a"], ids=[1], n_tokens=1),
-            Sequence(id="s_drop", tokens=["b"], ids=[2], n_tokens=1),
+            Sequence(id="s_keep", tokens=[Token(id=1, token="a")], n_tokens=1),
+            Sequence(id="s_drop", tokens=[Token(id=2, token="b")], n_tokens=1),
         ],
         samples=[
             Sample(id="alpha", tokens=[Token(id=-1, sequence_id="s_keep")]),
@@ -304,22 +302,6 @@ def test_document_subset_preserves_metadata_and_is_independent():
     # Mutating subset doesn't affect original.
     sub.samples[0].metadata["new"] = True
     assert "new" not in doc.samples[0].metadata
-
-
-def test_sequence_name_field_and_display_name():
-    s = Sequence(id="sequence_0", tokens=["a"], ids=[1], n_tokens=1)
-    assert s.name is None
-    assert s.display_name == "sequence_0"
-
-    s2 = Sequence(
-        id="sequence_1",
-        name="user_chat_template_open",
-        tokens=["b"],
-        ids=[2],
-        n_tokens=1,
-    )
-    assert s2.name == "user_chat_template_open"
-    assert s2.display_name == "user_chat_template_open"
 
 
 def test_metadata_created_at_is_datetime():

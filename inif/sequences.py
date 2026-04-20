@@ -100,9 +100,9 @@ def _replace_sequences_in_tokens(
             window = tokens[i : i + seq_len]
             if any(_has_extra_fields(t) or t.is_sequence_ref for t in window):
                 continue
-            if [t.token for t in window] != seq.tokens:
+            if [t.token for t in window] != [s.token for s in seq.tokens]:
                 continue
-            if [t.id for t in window] != seq.ids:
+            if [t.id for t in window] != [s.id for s in seq.tokens]:
                 continue
             new_tokens.append(Token(id=-1, sequence_id=seq.id))
             i += seq_len
@@ -149,16 +149,18 @@ def deduplicate_sequences(
             # sample's clean projection by construction.
             continue
 
-        while f"sequence_{next_idx}" in existing_ids:
+        while f"seq_{next_idx}" in existing_ids:
             next_idx += 1
-        seq_id = f"sequence_{next_idx}"
+        seq_id = f"seq_{next_idx}"
         existing_ids.add(seq_id)
 
         seq = Sequence(
             id=seq_id,
-            tokens=seq_tokens,
-            ids=seq_ids,
             n_tokens=len(seq_tokens),
+            tokens=[
+                Token(id=tid, token=tstr)
+                for tid, tstr in zip(seq_ids, seq_tokens)
+            ],
         )
         doc.sequences.append(seq)
         next_idx += 1
@@ -184,8 +186,10 @@ def expand_sequences(doc: InifDocument) -> InifDocument:
                     f"Sequence '{token.sequence_id}' not found"
                 )
                 seq = seq_map[token.sequence_id]
-                for tid, tstr in zip(seq.ids, seq.tokens):
-                    new_tokens.append(Token(id=tid, token=tstr, sequence_id=seq.id))
+                for t in seq.tokens:
+                    new_tokens.append(
+                        Token(id=t.id, token=t.token, sequence_id=seq.id)
+                    )
             else:
                 new_tokens.append(token)
         sample.tokens = new_tokens

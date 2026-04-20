@@ -45,7 +45,7 @@ Research-oriented library. Follow nnterp conventions:
   - tags: `token.tags`, `token.has_tag(t)`, `token.add_tag(t)`, `token.remove_tag(t)`
   - generic: `token.get_extra(key, default)`, `token.set_extra(key, value)`, `token.has_extra(key)`, `token.pop_extra(key)`, `token.extras` (snapshot dict)
 - **`TokenExtras`**: documentation-only Pydantic model declaring the conventional extras (`tags`, `role`, `logprob`, `logit_lens`); embedded under `$defs.TokenExtras` in the JSON schema for external validators/UIs.
-- **Sequence**: stores both `tokens: list[str]` and `ids: list[int]` (parallel arrays). Required so dedup → expand round-trips preserve real vocabulary IDs even after a sample has been compressed and later materialized. Optional `name: str` is a human-readable label distinct from the immutable `id`; use `seq.display_name` (falls back to id).
+- **Sequence**: stores both `tokens: list[str]` and `ids: list[int]` (parallel arrays). Required so dedup → expand round-trips preserve real vocabulary IDs even after a sample has been compressed and later materialized.
 - **Sample.id**: always `str`. A `@field_validator(mode="before")` coerces ints (Inspect AI uses int sample ids by default).
 - **Sample.spans**: validated against `len(tokens)` at construction; out-of-range positions raise `ValidationError`.
 - **Sample.materialize_position(expanded_pos, sequences)**: expands the containing sequence ref in-place when `expanded_pos` falls inside one, returning `(actual_index, real_token)`. Other refs and other samples are left untouched.

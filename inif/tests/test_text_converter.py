@@ -66,7 +66,7 @@ def test_from_texts_with_dedup():
         deduplicate=True,
     )
     assert len(doc.sequences) == 1
-    assert doc.sequences[0].tokens == ["a", "b", "c"]
+    assert [t.token for t in doc.sequences[0].tokens] == ["a", "b", "c"]
 
 
 def test_from_texts_metadata():

@@ -112,16 +112,18 @@ def test_save_load_preserves_extra_fields():
 
 
 def test_sequence_ids_survive_save_load(doc):
-    """Sequence.ids must round-trip through save/load — losing them would
-    corrupt every expanded token's vocabulary id."""
+    """Sequence token ids must round-trip through save/load — losing them
+    would corrupt every expanded token's vocabulary id."""
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.inif.json"
         save(doc, path)
         doc2 = load(path)
 
     for s_orig, s_reload in zip(doc.sequences, doc2.sequences):
-        assert s_reload.ids == s_orig.ids
-        assert s_reload.tokens == s_orig.tokens
+        assert [t.id for t in s_reload.tokens] == [t.id for t in s_orig.tokens]
+        assert [t.token for t in s_reload.tokens] == [
+            t.token for t in s_orig.tokens
+        ]
 
 
 def test_load_with_explicit_compress_override(doc):
