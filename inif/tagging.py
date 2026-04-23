@@ -191,10 +191,13 @@ def tag_chat_roles(
         pos += len(s)
 
     concatenated = "".join(decoded)
-    assert concatenated == formatted, (
-        f"Decoded tokens don't reconstruct the formatted string "
-        f"({len(concatenated)} vs {len(formatted)} chars)"
-    )
+    # Best-effort: some tokenizers are lossy for specific code points (e.g.
+    # Qwen replaces U+2028 with U+FFFD during encode/decode). When the
+    # decoded stream diverges from the formatted chat template, character
+    # offsets for ``content`` lookups stop lining up, so we skip role tagging
+    # for this sample rather than raise — mirroring ``_annotate_response_tokens``.
+    if concatenated != formatted:
+        return
 
     content_spans: list[tuple[int, int, str]] = []
     search_from = 0

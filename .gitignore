@@ -1,6 +1,7 @@
 # project specific
 .coverage
 .idea
+devtest/
 
 # general
 .junk/**

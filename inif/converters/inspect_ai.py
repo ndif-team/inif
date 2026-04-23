@@ -59,15 +59,16 @@ def _extract_model_info(eval_log: Any, tokenizer: Any = None) -> ModelInfo:
 
 def _extract_source_eval(eval_log: Any) -> SourceEval:
     eval_spec = eval_log.eval
+    task_version = getattr(eval_spec, "task_version", None)
+    if task_version is not None:
+        task_version = str(task_version)
     return SourceEval(
         framework="inspect_ai",
         framework_version=eval_spec.inspect_version
         if hasattr(eval_spec, "inspect_version")
         else None,
         task=eval_spec.task,
-        task_version=eval_spec.task_version
-        if hasattr(eval_spec, "task_version")
-        else None,
+        task_version=task_version,
         eval_id=eval_spec.eval_id if hasattr(eval_spec, "eval_id") else None,
         run_id=eval_spec.run_id if hasattr(eval_spec, "run_id") else None,
     )
@@ -116,9 +117,23 @@ def _messages_to_tokens(
         token_ids = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=False, return_dict=False
         )
-        for tid in token_ids:
-            token_str = tokenizer.decode([tid], skip_special_tokens=False)
+        # Incremental decode: a BPE token may carry only part of a multi-byte
+        # UTF-8 character (e.g. θ, ‒, ). ``decode([tid])`` in isolation
+        # returns the replacement char (�) for such bytes, which breaks the
+        # round-trip check in ``tag_chat_roles``. Decoding the growing prefix
+        # lets the tokenizer merge partial bytes and splits the full string
+        # back into per-token pieces that concatenate to the chat template
+        # exactly.
+        prev_decoded = ""
+        prev_len = 0
+        for i, tid in enumerate(token_ids):
+            cur_decoded = tokenizer.decode(
+                token_ids[: i + 1], skip_special_tokens=False
+            )
+            token_str = cur_decoded[prev_len:]
             tokens.append(Token(id=tid, token=token_str))
+            prev_decoded = cur_decoded
+            prev_len = len(prev_decoded)
     else:
         for msg in messages:
             text = msg["content"]
