@@ -52,8 +52,7 @@ class FlatTokenStore(BaseModel):
         for tag, positions in self.tags.items():
             for pos in positions:
                 assert 0 <= pos < n_tokens, (
-                    f"Tag {tag!r} position {pos} out of range "
-                    f"(n_tokens={n_tokens})"
+                    f"Tag {tag!r} position {pos} out of range (n_tokens={n_tokens})"
                 )
         return self
 
@@ -164,10 +163,7 @@ class FlatTokenStore(BaseModel):
         self.tag_compiled_regexes(compile_regex_tags(regex_tags))
 
     def tag_compiled_regexes(self, regex_tags: list[CompiledRegexTag]) -> None:
-        existing = {
-            tag: set(self.tags.get(tag, []))
-            for _, tag in regex_tags
-        }
+        existing = {tag: set(self.tags.get(tag, [])) for _, tag in regex_tags}
         for _, tag in regex_tags:
             self.tags.setdefault(tag, [])
 

@@ -38,8 +38,7 @@ def _is_token_list(value: list) -> bool:
     if not value:
         return False
     return all(
-        isinstance(v, dict) and "id" in v and isinstance(v["id"], int)
-        for v in value
+        isinstance(v, dict) and "id" in v and isinstance(v["id"], int) for v in value
     )
 
 
@@ -55,8 +54,7 @@ def _format_token_list(tokens: list[dict], pad: str) -> list[str]:
     for tok in tokens:
         non_id = [(k, v) for k, v in tok.items() if k != "id"]
         left = ", ".join(
-            f"{json.dumps(k, ensure_ascii=False)}: "
-            f"{json.dumps(v, ensure_ascii=False)}"
+            f"{json.dumps(k, ensure_ascii=False)}: {json.dumps(v, ensure_ascii=False)}"
             for k, v in non_id
         )
         if non_id:
@@ -98,9 +96,7 @@ def _dumps_pretty(value: Any, indent: int = 4, level: int = 0) -> str:
         if _is_token_list(value):
             lines = _format_token_list(value, inner_pad)
             return "[\n" + ",\n".join(lines) + "\n" + pad + "]"
-        parts = [
-            f"{inner_pad}{_dumps_pretty(v, indent, level + 1)}" for v in value
-        ]
+        parts = [f"{inner_pad}{_dumps_pretty(v, indent, level + 1)}" for v in value]
         return "[\n" + ",\n".join(parts) + "\n" + pad + "]"
 
     return json.dumps(value, ensure_ascii=False)

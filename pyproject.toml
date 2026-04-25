@@ -68,6 +68,7 @@ allowed-unresolved-imports = ["pydantic.**", "transformers.**", "inspect_ai.**",
 [tool.ruff]
 line-length = 88
 target-version = "py39"
+extend-exclude = ["docs/_extensions"]
 
 [tool.ruff.format]
 docstring-code-format = true

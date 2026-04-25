@@ -121,9 +121,7 @@ def test_sequence_ids_survive_save_load(doc):
 
     for s_orig, s_reload in zip(doc.sequences, doc2.sequences):
         assert [t.id for t in s_reload.tokens] == [t.id for t in s_orig.tokens]
-        assert [t.token for t in s_reload.tokens] == [
-            t.token for t in s_orig.tokens
-        ]
+        assert [t.token for t in s_reload.tokens] == [t.token for t in s_orig.tokens]
 
 
 def test_load_with_explicit_compress_override(doc):

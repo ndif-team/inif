@@ -2,6 +2,7 @@
 .coverage
 .idea
 devtest/
+logs/
 
 # general
 .junk/**
