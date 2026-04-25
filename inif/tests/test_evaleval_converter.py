@@ -233,8 +233,10 @@ def test_messages_from_record_agentic_serializes_tool_calls():
 # ---------------------------------------------------------------------------
 
 
-def test_from_instance_records_single_turn_no_tokenizer():
-    doc = from_instance_records([_make_record()], deduplicate=False)
+def test_from_instance_records_single_turn():
+    doc = from_instance_records(
+        [_make_record()], tokenizer=_chat_tokenizer(), deduplicate=False
+    )
     assert doc.total_samples == 1
     s = doc.samples[0]
     assert s.id == "q1"
@@ -242,7 +244,8 @@ def test_from_instance_records_single_turn_no_tokenizer():
     assert s.references == ["4"]
     assert s.interaction_type == "single_turn"
     assert s.texts == ["What is 2+2?", "The answer is 4."]
-    assert s.tokens == []
+    # Tokens are a load-bearing INIF invariant — always populated.
+    assert len(s.tokens) > 0
     assert len(s.scores) == 1
     assert s.scores[0].value == 1.0
     assert s.scores[0].answer == "4"
@@ -305,7 +308,9 @@ def test_tier1_fields_populate_from_record():
         sample_hash="deadbeef" * 8,
         error=None,
     )
-    doc = from_instance_records([record], deduplicate=False)
+    doc = from_instance_records(
+        [record], tokenizer=_chat_tokenizer(), deduplicate=False
+    )
     s = doc.samples[0]
     assert s.choices == ["A", "B", "C", "D"]
     assert s.sample_hash == "deadbeef" * 8
@@ -328,13 +333,19 @@ def test_tier1_fields_populate_from_record():
 
 def test_target_singleton_vs_multi_reference():
     # len(reference) == 1 → Sample.target is a str AND references is the full list.
-    doc1 = from_instance_records([_make_record(references=("4",))], deduplicate=False)
+    doc1 = from_instance_records(
+        [_make_record(references=("4",))],
+        tokenizer=_chat_tokenizer(),
+        deduplicate=False,
+    )
     assert doc1.samples[0].target == "4"
     assert doc1.samples[0].references == ["4"]
 
     # Multiple references → target stays None, references holds them all.
     doc2 = from_instance_records(
-        [_make_record(references=("4", "four"))], deduplicate=False
+        [_make_record(references=("4", "four"))],
+        tokenizer=_chat_tokenizer(),
+        deduplicate=False,
     )
     assert doc2.samples[0].target is None
     assert doc2.samples[0].references == ["4", "four"]
@@ -342,13 +353,17 @@ def test_target_singleton_vs_multi_reference():
 
 def test_error_promoted_to_first_class_field():
     record = _make_record(error="API timeout after 60s")
-    doc = from_instance_records([record], deduplicate=False)
+    doc = from_instance_records(
+        [record], tokenizer=_chat_tokenizer(), deduplicate=False
+    )
     assert doc.samples[0].error == "API timeout after 60s"
     assert "error" not in doc.samples[0].metadata
 
 
 def test_error_absent_when_null():
-    doc = from_instance_records([_make_record()], deduplicate=False)
+    doc = from_instance_records(
+        [_make_record()], tokenizer=_chat_tokenizer(), deduplicate=False
+    )
     assert doc.samples[0].error is None
 
 
@@ -375,7 +390,9 @@ def test_answer_attribution_terminal_drives_score_answer():
             "is_terminal": True,
         },
     ]
-    doc = from_instance_records([record], deduplicate=False)
+    doc = from_instance_records(
+        [record], tokenizer=_chat_tokenizer(), deduplicate=False
+    )
     s = doc.samples[0]
     assert s.scores[0].answer == "final"
     assert s.scores[0].metadata["extraction_method"] == "exact_match"
@@ -419,7 +436,9 @@ def test_reasoning_tag_applied_via_char_span():
 def test_aggregate_metadata_merged():
     record = _make_record(evaluation_result_id="eval_001_acc")
     agg = _make_aggregate(evaluation_result_id="eval_001_acc", aggregate_score=0.825)
-    doc = from_instance_records([record], aggregate=agg, deduplicate=False)
+    doc = from_instance_records(
+        [record], aggregate=agg, tokenizer=_chat_tokenizer(), deduplicate=False
+    )
 
     md = doc.metadata
     assert md.model.name == "meta-llama/Llama-3.2-1B"
@@ -443,7 +462,9 @@ def test_token_usage_and_performance_surface_on_sample():
         },
         performance={"latency_ms": 500.0, "time_to_first_token_ms": 50.0},
     )
-    doc = from_instance_records([record], deduplicate=False)
+    doc = from_instance_records(
+        [record], tokenizer=_chat_tokenizer(), deduplicate=False
+    )
     s = doc.samples[0]
     assert s.input_tokens == 12
     assert s.output_tokens == 34
@@ -488,7 +509,9 @@ def test_from_eval_json_roundtrip(tmp_path: Path):
         ]:
             f.write(json.dumps(rec) + "\n")
 
-    doc = from_eval_json(agg_path, inst_path, deduplicate=False)
+    doc = from_eval_json(
+        agg_path, inst_path, tokenizer=_chat_tokenizer(), deduplicate=False
+    )
     assert doc.total_samples == 2
     assert doc.metadata.extra["metric_config"]["metric_id"] == "accuracy"
     assert str(inst_path) in doc.metadata.sources
@@ -527,3 +550,130 @@ def test_from_hf_dataset_smoke():
     assert doc.total_samples <= 3
     assert doc.metadata.source_eval is not None
     assert doc.metadata.source_eval.framework == "evaleval"
+
+
+# ---------------------------------------------------------------------------
+# Tokenizer resolution
+# ---------------------------------------------------------------------------
+
+
+class _FakeAutoTokenizer:
+    """Stand-in for ``transformers.AutoTokenizer`` used by resolver tests.
+
+    Records every ``from_pretrained`` call. By default returns a fake instance
+    whose ``name_or_path`` reflects the requested id; raise behavior is
+    controlled by ``raise_for``.
+    """
+
+    calls: list[str] = []
+    raise_for: set[str] = set()
+
+    @classmethod
+    def reset(cls):
+        cls.calls = []
+        cls.raise_for = set()
+
+    @classmethod
+    def from_pretrained(cls, model_id, **kwargs):
+        cls.calls.append(model_id)
+        if model_id in cls.raise_for:
+            raise OSError(f"fake-not-found: {model_id}")
+
+        class _Tok:
+            name_or_path = model_id
+
+            def apply_chat_template(self, messages, **kw):  # noqa: ARG002
+                return ""
+
+        return _Tok()
+
+
+def _patch_autotokenizer(monkeypatch):
+    import transformers
+
+    _FakeAutoTokenizer.reset()
+    monkeypatch.setattr(transformers, "AutoTokenizer", _FakeAutoTokenizer)
+
+
+_RESOLVER_KWARGS = dict(
+    include_messages=False,
+    deduplicate=False,
+    tag_chat_roles=False,
+    tag_generated=False,
+    tag_reasoning=False,
+)
+
+
+def test_resolver_auto_loads_from_record_model_id(monkeypatch):
+    _patch_autotokenizer(monkeypatch)
+    record = _make_record(model_id="meta-llama/Llama-3.2-1B")
+    # ``include_messages=False`` short-circuits actual tokenization so this
+    # test only exercises the resolver path.
+    from_instance_records([record], **_RESOLVER_KWARGS)
+    assert _FakeAutoTokenizer.calls == ["meta-llama/Llama-3.2-1B"]
+
+
+def test_resolver_strips_provider_prefix(monkeypatch):
+    _patch_autotokenizer(monkeypatch)
+    record = _make_record(model_id="together/moonshotai/Kimi-K2.5")
+    from_instance_records([record], **_RESOLVER_KWARGS)
+    assert _FakeAutoTokenizer.calls == ["moonshotai/Kimi-K2.5"]
+
+
+def test_resolver_raises_when_model_id_missing():
+    record = _make_record(model_id="")
+    with pytest.raises(ValueError, match="no model id is available"):
+        from_instance_records([record], deduplicate=False)
+
+
+def test_resolver_raises_when_tokenizer_unavailable(monkeypatch):
+    _patch_autotokenizer(monkeypatch)
+    _FakeAutoTokenizer.raise_for = {"openai/gpt-4"}
+    record = _make_record(model_id="openai/gpt-4")
+    with pytest.raises(ValueError, match="Could not auto-load a tokenizer"):
+        from_instance_records([record], **_RESOLVER_KWARGS)
+
+
+def test_resolver_explicit_id_warns_on_mismatch(monkeypatch):
+    _patch_autotokenizer(monkeypatch)
+    record = _make_record(model_id="meta-llama/Llama-3.2-1B")
+    with pytest.warns(UserWarning, match="Tokenizer mismatch"):
+        from_instance_records(
+            [record], tokenizer="mistralai/Mistral-7B", **_RESOLVER_KWARGS
+        )
+
+
+def test_resolver_explicit_id_no_warning_when_matched(monkeypatch, recwarn):
+    _patch_autotokenizer(monkeypatch)
+    record = _make_record(model_id="meta-llama/Llama-3.2-1B")
+    from_instance_records(
+        [record], tokenizer="meta-llama/Llama-3.2-1B", **_RESOLVER_KWARGS
+    )
+    assert not [w for w in recwarn.list if issubclass(w.category, UserWarning)]
+
+
+def test_resolver_instance_warns_on_mismatch():
+    record = _make_record(model_id="meta-llama/Llama-3.2-1B")
+
+    class _Tok:
+        name_or_path = "Qwen/Qwen2.5-3B-Instruct"
+
+    with pytest.warns(UserWarning, match="Tokenizer mismatch"):
+        from_instance_records(
+            [record],
+            tokenizer=_Tok(),
+            include_messages=False,
+            deduplicate=False,
+            tag_chat_roles=False,
+            tag_generated=False,
+            tag_reasoning=False,
+        )
+
+
+def test_resolver_treats_none_as_auto(monkeypatch):
+    """``tokenizer=None`` is an alias for ``"auto"``: tokens are still produced,
+    never skipped (tokens are a load-bearing INIF invariant)."""
+    _patch_autotokenizer(monkeypatch)
+    record = _make_record(model_id="meta-llama/Llama-3.2-1B")
+    from_instance_records([record], tokenizer=None, **_RESOLVER_KWARGS)
+    assert _FakeAutoTokenizer.calls == ["meta-llama/Llama-3.2-1B"]

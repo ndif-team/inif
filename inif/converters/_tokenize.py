@@ -7,6 +7,7 @@ dicts and a HuggingFace tokenizer.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 from inif.converters._decode import (
@@ -233,3 +234,127 @@ def tag_char_span(
             sample.tokens[i].add_tag(tag)
         pos = s_end
     return True
+
+
+# ---------------------------------------------------------------------------
+# Tokenizer resolution
+# ---------------------------------------------------------------------------
+
+# Routing prefixes some eval frameworks prepend to model ids (e.g. Inspect AI's
+# ``together/moonshotai/Kimi-K2.5``). Stripped before handing the id to
+# ``AutoTokenizer.from_pretrained`` so the underlying HF id resolves cleanly.
+# Keyed on a small allowlist to avoid chopping a legitimate org from a HF id
+# (``meta-llama/Llama-3.1-8B`` must NOT lose its first component).
+_KNOWN_PROVIDERS = frozenset(
+    {
+        "azureml",
+        "anthropic",
+        "bedrock",
+        "cohere",
+        "deepseek",
+        "fireworks",
+        "google",
+        "groq",
+        "hf",
+        "huggingface",
+        "mistral",
+        "mockllm",
+        "ollama",
+        "openai",
+        "perplexity",
+        "replicate",
+        "together",
+        "vertex",
+        "vllm",
+    }
+)
+
+
+def _strip_provider_prefix(model_id: str) -> str:
+    """Strip a routing prefix like ``together/`` from a model id.
+
+    Only strips when the head matches the provider allowlist AND the tail
+    still contains a ``/``, so HF-format ids like ``meta-llama/Llama-3.1-8B``
+    are left untouched.
+    """
+    if "/" not in model_id:
+        return model_id
+    head, _, rest = model_id.partition("/")
+    if head.lower() in _KNOWN_PROVIDERS and "/" in rest:
+        return rest
+    return model_id
+
+
+def _ids_match(a: str | None, b: str | None) -> bool:
+    if not a or not b:
+        return False
+    return _strip_provider_prefix(a) == _strip_provider_prefix(b)
+
+
+def _warn_tokenizer_mismatch(tokenizer: Any, source_model_id: str | None) -> None:
+    if not source_model_id:
+        return
+    tokenizer_id = getattr(tokenizer, "name_or_path", None)
+    if not tokenizer_id or _ids_match(tokenizer_id, source_model_id):
+        return
+    warnings.warn(
+        f"Tokenizer mismatch: tokenizer ({tokenizer_id!r}) differs from the "
+        f"source eval's model id ({source_model_id!r}). Token-level data "
+        "will reflect the supplied tokenizer, not the original model. Pass "
+        '``tokenizer="auto"`` to auto-load the matching tokenizer, or '
+        "ignore this warning if the mismatch is intentional.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def resolve_tokenizer(tokenizer: Any, source_model_id: str | None) -> Any:
+    """Resolve the tokenizer used for INIF conversion.
+
+    Tokens are a load-bearing invariant of every INIF sample, so this never
+    returns ``None``: callers always get back a usable tokenizer or a
+    ``ValueError`` explaining why one couldn't be obtained.
+
+    - ``tokenizer="auto"`` (the default for converter entry points) and
+      ``tokenizer=None`` (treated as ``"auto"`` for ergonomics):
+      ``AutoTokenizer.from_pretrained(source_model_id)`` with the routing
+      prefix stripped (``together/`` etc.). Raises ``ValueError`` if
+      ``source_model_id`` is missing or the load fails (closed-source ids
+      like ``openai/gpt-4`` will hit this path).
+    - ``tokenizer`` is a string other than ``"auto"``: load it via
+      ``AutoTokenizer.from_pretrained``, then warn (but don't fail) if its
+      id disagrees with ``source_model_id``.
+    - ``tokenizer`` is a tokenizer instance: use as-is, warn (but don't fail)
+      if its ``name_or_path`` disagrees with ``source_model_id``.
+    """
+    if tokenizer is None or (isinstance(tokenizer, str) and tokenizer == "auto"):
+        if not source_model_id:
+            raise ValueError(
+                "Cannot auto-load a tokenizer: no model id is available in "
+                "the source. Pass ``tokenizer=<id-or-instance>`` explicitly."
+            )
+        from transformers import AutoTokenizer
+
+        canonical_id = _strip_provider_prefix(source_model_id)
+        try:
+            return AutoTokenizer.from_pretrained(canonical_id, trust_remote_code=True)
+        except Exception as e:
+            raise ValueError(
+                f"Could not auto-load a tokenizer for model id "
+                f"{source_model_id!r} (canonical: {canonical_id!r}). This is "
+                "common for closed-source models (OpenAI, Anthropic, …). "
+                "Pass ``tokenizer=<hf-id-or-instance>`` with an HF tokenizer "
+                "that approximates the source model — token-level data will "
+                "then be approximate but tokens will still be produced. "
+                f"Underlying error: {e}"
+            ) from e
+
+    if isinstance(tokenizer, str):
+        from transformers import AutoTokenizer
+
+        loaded = AutoTokenizer.from_pretrained(tokenizer, trust_remote_code=True)
+        _warn_tokenizer_mismatch(loaded, source_model_id)
+        return loaded
+
+    _warn_tokenizer_mismatch(tokenizer, source_model_id)
+    return tokenizer

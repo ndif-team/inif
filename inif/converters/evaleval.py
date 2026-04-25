@@ -29,6 +29,7 @@ from inif.converters._tokenize import (
     find_message_token_range,
     messages_to_tokens,
     offset_mapping_decode,
+    resolve_tokenizer,
     tag_char_span,
 )
 from inif.models import (
@@ -211,7 +212,7 @@ def from_instance_records(
     records: list[dict],
     aggregate: dict | None = None,
     *,
-    tokenizer: Any = None,
+    tokenizer: Any = "auto",
     include_messages: bool = True,
     deduplicate: bool = True,
     min_sequence_length: int = 3,
@@ -226,8 +227,23 @@ def from_instance_records(
         aggregate: Optional aggregate record (``eval.schema.json``). Contributes
             model developer info, eval library version, and metric config to
             document-level metadata.
-        tokenizer: HF tokenizer or model id string. When ``None``, tokenization
-            is skipped (messages still produce ``texts`` but no ``tokens``).
+        tokenizer: One of:
+
+            - ``"auto"`` (default) or ``None`` — auto-load
+              ``AutoTokenizer.from_pretrained`` based on each record's
+              ``model_id`` (with aggregate fallback). Raises if the id is
+              missing or the tokenizer cannot be loaded (closed-source ids
+              like ``openai/gpt-4`` will hit this).
+            - a model id string — loaded via ``AutoTokenizer.from_pretrained``;
+              warns if the resolved id disagrees with the source records'
+              ``model_id``.
+            - a tokenizer instance — used as-is; warns if its
+              ``name_or_path`` disagrees with the source records' ``model_id``.
+
+            Tokens are a load-bearing invariant of every INIF sample, so
+            there is no way to opt out of tokenization — every option here
+            yields a usable tokenizer or raises.
+
         include_messages: Include message texts on each ``Sample``.
         deduplicate: Run sequence deduplication over the produced samples.
         min_sequence_length: Minimum length for common-sequence detection.
@@ -240,12 +256,10 @@ def from_instance_records(
     Returns:
         An :class:`InifDocument` with one :class:`Sample` per record.
     """
-    if isinstance(tokenizer, str):
-        from transformers import AutoTokenizer
-
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-
     model_name = _resolve_model_name(records, aggregate)
+    tokenizer = resolve_tokenizer(
+        tokenizer, model_name if model_name != "unknown" else None
+    )
     model_info = ModelInfo(
         name=model_name,
         huggingface_id=model_name if "/" in model_name else None,
@@ -258,7 +272,7 @@ def from_instance_records(
     byte_decoder: ByteSliceDecoder | None = None
     decode_cache: dict[int, str] | None = None
     use_offset_mapping = False
-    if tokenizer is not None and records:
+    if records:
         probe_msgs = _messages_from_record(records[0])
         if probe_msgs and offset_mapping_decode(probe_msgs, tokenizer) is not None:
             use_offset_mapping = True
@@ -309,7 +323,7 @@ def from_instance_records(
             metadata=_build_sample_metadata(record),
         )
 
-        if tag_generated and tokenizer is not None:
+        if tag_generated:
             rng = find_message_token_range(
                 sample.tokens, msg_dicts, tokenizer, role="assistant", which="last"
             )
@@ -318,7 +332,7 @@ def from_instance_records(
                     sample.tokens[i].add_tag("generated")
 
         reasoning = _reasoning_text_for_record(record) if tag_reasoning else None
-        if reasoning and tokenizer is not None:
+        if reasoning:
             tag_char_span(sample, msg_dicts, tokenizer, reasoning, "reasoning")
         reasoning_texts.append(reasoning)
 
@@ -334,10 +348,10 @@ def from_instance_records(
     )
     doc = InifDocument(metadata=metadata, samples=samples)
 
-    if deduplicate and tokenizer is not None:
+    if deduplicate:
         doc = deduplicate_sequences(doc, min_length=min_sequence_length)
 
-    if tag_chat_roles and tokenizer is not None:
+    if tag_chat_roles:
         from inif.tagging import tag_chat_roles_doc
 
         tag_chat_roles_doc(doc, all_msg_dicts, tokenizer)

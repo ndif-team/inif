@@ -59,6 +59,13 @@ Research-oriented library. Follow nnterp conventions:
 - **Metadata.created_at**: `datetime` (pydantic auto-parses ISO strings on load; `to_dict` uses `mode="json"` to emit ISO strings).
 - **Deduplication**: finds token sequences common to ALL samples via set-intersection of contiguous n-grams; replacement requires both the token strings AND ids to match.
 
+## Tokenizer resolution (Inspect + evaleval)
+
+- **Always present**: tokens are a load-bearing INIF invariant — there is no way to opt out of tokenization at the converter level.
+- **Default `tokenizer="auto"`** (and the alias `tokenizer=None`): both converters read the source's model id (`eval_log.eval.model` for Inspect, `record["model_id"]` / aggregate fallback for evaleval), strip routing prefixes (`together/`, `hf/`, `bedrock/`, …) via the `_KNOWN_PROVIDERS` allowlist, and call `AutoTokenizer.from_pretrained(canonical_id, trust_remote_code=True)`. Raises `ValueError` if the id is missing or unloadable (closed-source ids like `openai/gpt-4` will hit this — the error message tells the user to pass an HF stand-in).
+- **Explicit string / instance**: still loaded / used, but compared against the source's model id via the same prefix-stripping comparison; on mismatch a `UserWarning` is emitted (`"Tokenizer mismatch: …"`). The mismatch may be intentional (forcing one model's tokens through another's tokenizer for cross-model studies); the warning just keeps users informed.
+- The shared resolver lives in `inif/converters/_tokenize.py::resolve_tokenizer` and is imported by both `from_eval_log` (Inspect) and `from_instance_records` (evaleval).
+
 ## Inspect AI converter conventions
 
 - **`tag_generated=True`** (default): tokens belonging to the LAST assistant message are tagged `"generated"`. Identification uses character-span matching against `apply_chat_template` output, so it works for any HuggingFace chat template.

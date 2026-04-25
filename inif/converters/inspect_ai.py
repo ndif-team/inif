@@ -12,6 +12,7 @@ from inif.converters._tokenize import (
     find_message_token_range,
     messages_to_tokens,
     offset_mapping_decode,
+    resolve_tokenizer,
 )
 from inif.models import (
     InifDocument,
@@ -184,7 +185,7 @@ def _annotate_response_tokens(
 
 def from_eval_log(
     eval_log: Any,
-    tokenizer: Any = None,
+    tokenizer: Any = "auto",
     include_messages: bool = True,
     deduplicate: bool = True,
     min_sequence_length: int = 3,
@@ -196,10 +197,24 @@ def from_eval_log(
 
     Args:
         eval_log: An inspect_ai.log.EvalLog object.
-        tokenizer: A HuggingFace tokenizer, or a model identifier string
-            (e.g. ``"openai/gpt-oss-20b"``) that will be loaded via
-            ``AutoTokenizer.from_pretrained``. If ``None``, tokenization is
-            skipped (messages still produce ``texts`` but no ``tokens``).
+        tokenizer: One of:
+
+            - ``"auto"`` (default) or ``None`` — auto-load
+              ``AutoTokenizer.from_pretrained`` based on
+              ``eval_log.eval.model``, after stripping any routing prefix
+              (``together/``, ``hf/``, …). Raises ``ValueError`` if the
+              model id is missing or the tokenizer cannot be loaded
+              (closed-source ids like ``openai/gpt-4`` will hit this).
+            - a model id string — loaded via ``AutoTokenizer.from_pretrained``;
+              warns if the resolved id disagrees with the source eval's
+              model id.
+            - a tokenizer instance — used as-is; warns if its
+              ``name_or_path`` disagrees with the source eval's model id.
+
+            Tokens are a load-bearing invariant of every INIF sample, so
+            there is no way to opt out of tokenization — every option here
+            yields a usable tokenizer or raises.
+
         include_messages: Whether to include message-level text segments.
         deduplicate: Whether to run sequence deduplication.
         min_sequence_length: Minimum length for common sequence detection.
@@ -210,10 +225,10 @@ def from_eval_log(
             output to the response tokens (best-effort: requires the tokenizer
             and the eval-source tokenization to agree on token count).
     """
-    if isinstance(tokenizer, str):
-        from transformers import AutoTokenizer
-
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+    source_model_id = (
+        getattr(eval_log.eval, "model", None) if eval_log.eval is not None else None
+    )
+    tokenizer = resolve_tokenizer(tokenizer, source_model_id)
 
     model_info = _extract_model_info(eval_log, tokenizer)
     source_eval = _extract_source_eval(eval_log)
@@ -241,7 +256,7 @@ def from_eval_log(
     byte_decoder: ByteSliceDecoder | None = None
     decode_cache: dict[int, str] | None = None
     use_offset_mapping = False
-    if tokenizer is not None and eval_log.samples:
+    if eval_log.samples:
         first_msgs: list[dict[str, str]] = []
         probe_sample = next(
             (s for s in eval_log.samples if getattr(s, "messages", None)),
@@ -332,10 +347,10 @@ def from_eval_log(
         samples=samples,
     )
 
-    if deduplicate and tokenizer is not None:
+    if deduplicate:
         doc = deduplicate_sequences(doc, min_length=min_sequence_length)
 
-    if tag_chat_roles and tokenizer is not None:
+    if tag_chat_roles:
         from inif.tagging import tag_chat_roles_doc
 
         tag_chat_roles_doc(doc, all_msg_dicts, tokenizer)
