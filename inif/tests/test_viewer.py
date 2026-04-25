@@ -259,8 +259,10 @@ def test_render_html_exact_match_other_value():
     assert "\u2717" not in html
 
 
-def test_render_html_no_exact_match_scorer():
-    """Sample without exact_match scorer shows no indicator."""
+def test_render_html_other_numeric_scorer_also_shows_indicator():
+    """Any scorer whose value is 0.0 or 1.0 drives the sidebar indicator \u2014 not
+    just exact_match. Covers Inspect scorers like ``accuracy``/``choice`` and
+    any custom scorer that emits binary results."""
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="em_test")),
         samples=[
@@ -272,7 +274,46 @@ def test_render_html_no_exact_match_scorer():
         ],
     )
     html = render_html(doc)
-    # Check marks/X marks should not appear in the sample list
+    assert "inif-em-pass" in html
+
+
+def test_render_html_is_correct_metadata_drives_indicator():
+    """Scorers that carry explicit ``metadata.is_correct`` (as produced by the
+    evaleval converter) take precedence, so EEE samples get check/cross marks
+    even though their scorer name matches the benchmark, not ``exact_match``."""
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="em_test")),
+        samples=[
+            Sample(
+                id="s0",
+                tokens=[Token(id=1, token="hi")],
+                scores=[
+                    SampleScore(
+                        scorer="theory_of_mind",
+                        value=0.5,  # non-binary
+                        metadata={"is_correct": False},
+                    )
+                ],
+            ),
+        ],
+    )
+    html = render_html(doc)
+    assert "inif-em-fail" in html
+
+
+def test_render_html_non_binary_value_shows_no_indicator():
+    """A purely continuous score with no is_correct metadata stays blank."""
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="em_test")),
+        samples=[
+            Sample(
+                id="s0",
+                tokens=[Token(id=1, token="hi")],
+                scores=[SampleScore(scorer="bleu", value=0.72)],
+            ),
+        ],
+    )
+    html = render_html(doc)
     assert "\u2713" not in html
     assert "\u2717" not in html
 

@@ -467,14 +467,36 @@ def _render_metadata_panel(doc_data: dict) -> str:
     return "\n".join(lines)
 
 
+def _score_is_correct(score: dict) -> bool | None:
+    """Infer pass/fail for a single score, framework-agnostic.
+
+    Priority: explicit ``metadata.is_correct`` (how the evaleval converter
+    records correctness), then an Inspect-style ``"C"``/``"I"`` value, then a
+    numeric 0/1. Returns ``None`` when the score doesn't clearly represent a
+    binary outcome \u2014 callers should keep looking.
+    """
+    meta = score.get("metadata") or {}
+    if isinstance(meta.get("is_correct"), bool):
+        return meta["is_correct"]
+    val = score.get("value")
+    if val == "C":
+        return True
+    if val == "I":
+        return False
+    if val is True or val == 1 or val == 1.0:
+        return True
+    if val is False or val == 0 or val == 0.0:
+        return False
+    return None
+
+
 def _get_exact_match_indicator(sample_data: dict) -> str:
     for sc in sample_data.get("scores", []):
-        if sc.get("scorer") == "exact_match":
-            val = sc.get("value")
-            if val == 1.0:
-                return '<span class="inif-em-pass">\u2713</span>'
-            elif val == 0.0:
-                return '<span class="inif-em-fail">\u2717</span>'
+        result = _score_is_correct(sc)
+        if result is True:
+            return '<span class="inif-em-pass">\u2713</span>'
+        if result is False:
+            return '<span class="inif-em-fail">\u2717</span>'
     return ""
 
 

@@ -25,3 +25,4 @@ examples/*.json
 examples/*.html
 examples/*.inif
 examples/*.json.gz
+examples/*_shards/
