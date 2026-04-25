@@ -188,6 +188,11 @@ class Sample(BaseModel):
     spans: list[Span] = Field(default_factory=list)
     scores: list[SampleScore] = Field(default_factory=list)
     target: str | None = None
+    references: list[str] = Field(default_factory=list)
+    choices: list[str] | None = None
+    interaction_type: str | None = None
+    error: str | None = None
+    sample_hash: str | None = None
     metadata: dict = Field(default_factory=dict)
     total_time: float | None = None
     input_tokens: int | None = None

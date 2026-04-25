@@ -144,16 +144,16 @@ def _build_score(record: dict) -> SampleScore | None:
 
 
 def _build_sample_metadata(record: dict) -> dict[str, Any]:
-    md: dict[str, Any] = {"interaction_type": record.get("interaction_type")}
+    """Build the ``Sample.metadata`` dict for everything that isn't promoted to
+    a first-class field (see :class:`inif.models.Sample` for the promoted set:
+    ``interaction_type``, ``error``, ``sample_hash``, ``choices``,
+    ``references``).
+    """
+    md: dict[str, Any] = {}
 
     input_obj = record.get("input") or {}
     if input_obj.get("formatted") is not None:
         md["formatted_input"] = input_obj["formatted"]
-    refs = input_obj.get("reference") or []
-    if len(refs) != 1:
-        md["references"] = list(refs)
-    if input_obj.get("choices"):
-        md["choices"] = list(input_obj["choices"])
 
     evaluation = record.get("evaluation") or {}
     for k in ("num_turns", "tool_calls_count"):
@@ -169,10 +169,6 @@ def _build_sample_metadata(record: dict) -> dict[str, Any]:
     if performance:
         md["performance"] = dict(performance)
 
-    error = record.get("error")
-    if error is not None:
-        md["error"] = error
-
     eval_md = record.get("metadata")
     if eval_md:
         md["eval_metadata"] = dict(eval_md)
@@ -182,9 +178,6 @@ def _build_sample_metadata(record: dict) -> dict[str, Any]:
     ]
     if non_terminal:
         md["intermediate_answers"] = non_terminal
-
-    if record.get("sample_hash"):
-        md["sample_hash"] = record["sample_hash"]
 
     return md
 
@@ -294,8 +287,10 @@ def from_instance_records(
         score = _build_score(record)
         scores = [score] if score is not None else []
 
-        refs = (record.get("input") or {}).get("reference") or []
+        input_obj = record.get("input") or {}
+        refs = list(input_obj.get("reference") or [])
         target = refs[0] if len(refs) == 1 else None
+        choices = list(input_obj["choices"]) if input_obj.get("choices") else None
 
         token_usage = record.get("token_usage") or {}
         sample = Sample(
@@ -304,6 +299,11 @@ def from_instance_records(
             tokens=sample_tokens,
             scores=scores,
             target=target,
+            references=refs,
+            choices=choices,
+            interaction_type=record.get("interaction_type"),
+            error=record.get("error"),
+            sample_hash=record.get("sample_hash"),
             input_tokens=token_usage.get("input_tokens"),
             output_tokens=token_usage.get("output_tokens"),
             metadata=_build_sample_metadata(record),
