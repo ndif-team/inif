@@ -46,6 +46,29 @@ def test_from_texts_basic():
     assert doc.samples[0].tokens[1].token == "world"
 
 
+def test_from_texts_byte_level_split_utf8_roundtrips():
+    class SplitUtf8Tokenizer:
+        name_or_path = "split-utf8"
+        _commit_hash = None
+        encoder = {"Î": 1, "¸": 2}
+        byte_decoder = {"Î": 0xCE, "¸": 0xB8}
+
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            assert text == "θ"
+            return [1, 2]
+
+        def decode(self, ids: list[int], skip_special_tokens: bool = False) -> str:
+            if ids == [1, 2]:
+                return "θ"
+            return "�"
+
+    doc = from_texts(["θ"], tokenizer=SplitUtf8Tokenizer(), deduplicate=False)
+    pieces = [t.token for t in doc.samples[0].tokens]
+
+    assert pieces == ["", "θ"]
+    assert "".join(pieces) == "θ"
+
+
 def test_from_texts_custom_ids():
     tokenizer = MockTokenizer()
     doc = from_texts(

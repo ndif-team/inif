@@ -1,3 +1,4 @@
+from inif.flat import FlatTokenStore
 from inif.io import from_dict, load, save, to_dict
 from inif.models import (
     InifDocument,
@@ -21,14 +22,19 @@ from inif.selectors import (
     select_by_tag,
 )
 from inif.sequences import deduplicate_sequences, expand_sequences
+from inif.shards import iter_samples, iter_shards, load_shards, save_shards
 from inif.tagging import (
     TextTagMode,
     create_span_from_tag,
     remove_tag,
     remove_tag_all,
     tag_by_predicate,
+    tag_by_predicates,
+    tag_by_predicates_all,
     tag_by_regex,
     tag_by_regex_all,
+    tag_by_regexes,
+    tag_by_regexes_all,
     tag_by_text_regex,
     tag_by_text_regex_all,
     tag_chat_roles,
@@ -50,10 +56,15 @@ __all__ = [
     "Span",
     "Token",
     "TokenExtras",
+    "FlatTokenStore",
     # IO
     "from_dict",
+    "iter_samples",
+    "iter_shards",
     "load",
+    "load_shards",
     "save",
+    "save_shards",
     "to_dict",
     # Schema
     "get_schema",
@@ -72,8 +83,12 @@ __all__ = [
     "remove_tag",
     "remove_tag_all",
     "tag_by_predicate",
+    "tag_by_predicates",
+    "tag_by_predicates_all",
     "tag_by_regex",
     "tag_by_regex_all",
+    "tag_by_regexes",
+    "tag_by_regexes_all",
     "tag_by_text_regex",
     "tag_by_text_regex_all",
     "tag_chat_roles",

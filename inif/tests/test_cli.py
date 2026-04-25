@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from inif.cli import main
+from inif.models import InifDocument, Metadata, ModelInfo
 
 
 class MockTokenizer:
@@ -77,6 +78,34 @@ def test_convert_txt_directory():
             )
 
         assert out.exists()
+
+
+def test_convert_eval_passes_min_sequence_length():
+    doc = InifDocument(metadata=Metadata(model=ModelInfo(name="mock")))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = Path(tmpdir) / "output.inif.json"
+        with (
+            patch(
+                "inif.converters.inspect_ai.from_eval_file", return_value=doc
+            ) as conv,
+            patch("inif.io.save"),
+        ):
+            main(
+                [
+                    "convert",
+                    "eval",
+                    "input.eval",
+                    "-o",
+                    str(out),
+                    "-m",
+                    "mock",
+                    "--min-seq-length",
+                    "7",
+                ]
+            )
+
+    assert conv.call_args.kwargs["min_sequence_length"] == 7
 
 
 def test_cli_help(capsys):

@@ -5,8 +5,10 @@ from inif.tagging import (
     create_span_from_tag,
     remove_tag,
     tag_by_predicate,
+    tag_by_predicates,
     tag_by_regex,
     tag_by_regex_all,
+    tag_by_regexes,
     tag_by_text_regex,
     tag_chat_roles,
     tag_chat_roles_doc,
@@ -62,6 +64,46 @@ def test_tag_by_regex_all(doc):
         assert "greeting" in _get_tags(s.tokens[0])
 
 
+def test_tag_by_regex_all_flat_sample_does_not_materialize(doc):
+    """A flat sample in a doc with sequences should stay on the direct path."""
+    doc2 = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="test")),
+        sequences=doc.sequences,
+        samples=[
+            Sample(
+                id="s0",
+                tokens=[
+                    Token(id=1, token="A"),
+                    Token(id=2, token="B"),
+                    Token(id=3, token="C"),
+                ],
+            )
+        ],
+    )
+    before_tokens = list(doc2.samples[0].tokens)
+
+    tag_by_regex_all(doc2, r"^[AB]$", "letter")
+
+    assert doc2.samples[0].tokens == before_tokens
+    assert doc2.samples[0].tokens[0].has_tag("letter")
+    assert doc2.samples[0].tokens[1].has_tag("letter")
+    assert not doc2.samples[0].tokens[2].has_tag("letter")
+
+
+def test_tag_by_regexes_applies_multiple_tags_one_pass(sample_flat):
+    tag_by_regexes(
+        sample_flat,
+        [
+            (r"^This$", "capitalized"),
+            (r"is", "has_is"),
+        ],
+    )
+
+    assert sample_flat.tokens[1].has_tag("capitalized")
+    assert sample_flat.tokens[1].has_tag("has_is")
+    assert sample_flat.tokens[2].has_tag("has_is")
+
+
 def test_tag_by_regex_materializes_inside_ref(sample, sequences):
     """Matches inside a sequence ref should materialize the ref and tag the
     specific matching token, not the ref placeholder."""
@@ -86,11 +128,57 @@ def test_tag_by_regex_no_materialization_when_no_match(sample, sequences):
     assert sample.tokens[0].is_sequence_ref
 
 
+def test_tag_by_regexes_materializes_matching_ref_once(sample, sequences):
+    n_before = len(sample.tokens)
+    tag_by_regexes(
+        sample,
+        [
+            (r"^This$", "capitalized"),
+            (r"is", "has_is"),
+        ],
+        sequences=sequences,
+    )
+
+    assert len(sample.tokens) == n_before + 2
+    assert sample.tokens[1].token == "This"
+    assert sample.tokens[1].has_tag("capitalized")
+    assert sample.tokens[1].has_tag("has_is")
+    assert sample.tokens[2].token == " is"
+    assert sample.tokens[2].has_tag("has_is")
+
+
 def test_tag_by_predicate(sample_flat):
     tag_by_predicate(sample_flat, lambda t: t.id > 1000, "high_id")
     tagged = [t for t in sample_flat.tokens if "high_id" in _get_tags(t)]
     # Tokens with id 50256, 1212, 1332 have id > 1000
     assert len(tagged) == 3
+
+
+def test_tag_by_predicates_applies_multiple_tags(sample_flat):
+    tag_by_predicates(
+        sample_flat,
+        [
+            (lambda t: t.id > 1000, "high_id"),
+            (lambda t: t.token is not None and t.token.strip() == "This", "word"),
+        ],
+    )
+
+    assert sample_flat.tokens[0].has_tag("high_id")
+    assert sample_flat.tokens[1].has_tag("high_id")
+    assert sample_flat.tokens[1].has_tag("word")
+
+
+def test_tag_by_predicates_can_materialize_sequence_ref(sample, sequences):
+    tag_by_predicates(
+        sample,
+        [(lambda t: t.token == "This", "capitalized")],
+        sequences=sequences,
+    )
+
+    matching = [t for t in sample.tokens if t.has_tag("capitalized")]
+    assert len(matching) == 1
+    assert matching[0].token == "This"
+    assert matching[0].id == 1212
 
 
 def test_tag_positions(sample_flat):

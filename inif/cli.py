@@ -71,6 +71,7 @@ def _convert_eval(args: argparse.Namespace) -> None:
     for inp in args.inputs:
         kwargs = {
             "deduplicate": not args.no_dedup,
+            "min_sequence_length": args.min_seq_length,
             "tag_chat_roles": not args.no_tag_chat_roles,
         }
         if args.model:

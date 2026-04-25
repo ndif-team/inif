@@ -148,9 +148,7 @@ class Token(BaseModel):
         seq_map = {s.id: s for s in sequences}
         assert self.sequence_id in seq_map, f"Sequence '{self.sequence_id}' not found"
         seq = seq_map[self.sequence_id]
-        return [
-            Token(id=t.id, token=t.token, sequence_id=seq.id) for t in seq.tokens
-        ]
+        return [Token(id=t.id, token=t.token, sequence_id=seq.id) for t in seq.tokens]
 
 
 class Sequence(BaseModel):
@@ -216,9 +214,24 @@ class Sample(BaseModel):
         return self
 
     def get_expanded_tokens(self, sequences: list[Sequence]) -> list[Token]:
-        result = []
+        # Build the sequence map once per call instead of rebuilding it inside
+        # ``Token.expanded_tokens`` for every token (which would make this
+        # O(n_tokens × n_sequences)).
+        seq_map = {s.id: s for s in sequences}
+        result: list[Token] = []
         for token in self.tokens:
-            result.extend(token.expanded_tokens(sequences))
+            if not token.is_sequence_ref:
+                result.append(token)
+                continue
+            assert token.sequence_id is not None, (
+                "Sequence ref token must have sequence_id"
+            )
+            assert token.sequence_id in seq_map, (
+                f"Sequence '{token.sequence_id}' not found"
+            )
+            seq = seq_map[token.sequence_id]
+            for t in seq.tokens:
+                result.append(Token(id=t.id, token=t.token, sequence_id=seq.id))
         return result
 
     def get_tokens_by_positions(self, positions: list[int]) -> list[Token]:
@@ -330,6 +343,9 @@ class InifDocument(BaseModel):
 
         Sequences not referenced by any retained sample are dropped, so the
         output stays self-contained and minimal. Metadata is copied as-is.
+
+        The returned document is independent from this one: samples, sequences,
+        metadata, tokens, and nested extras are deep-copied.
         """
         kept_samples = [s.model_copy(deep=True) for s in self.samples if predicate(s)]
         referenced: set[str] = set()

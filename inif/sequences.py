@@ -3,29 +3,72 @@ from __future__ import annotations
 from inif.models import InifDocument, Sample, Sequence, Token
 
 
-def _get_contiguous_sequences(
-    tokens: list[str], min_length: int
-) -> set[tuple[str, ...]]:
-    """Extract all contiguous token subsequences of at least min_length."""
-    seqs: set[tuple[str, ...]] = set()
-    for length in range(min_length, len(tokens) + 1):
-        for start in range(len(tokens) - length + 1):
-            seqs.add(tuple(tokens[start : start + length]))
-    return seqs
+def _ngram_positions(tokens: list[str], n: int) -> dict[tuple[str, ...], list[int]]:
+    """Map each length-n contiguous n-gram in ``tokens`` to its start positions."""
+    positions: dict[tuple[str, ...], list[int]] = {}
+    for i in range(len(tokens) - n + 1):
+        positions.setdefault(tuple(tokens[i : i + n]), []).append(i)
+    return positions
 
 
 def _find_common_contiguous(
     token_lists: list[list[str]], min_length: int
 ) -> list[list[str]]:
-    """Find contiguous token sequences common to ALL token lists (intersection)."""
-    if not token_lists:
+    """Find contiguous token subsequences (length ≥ ``min_length``) common to
+    ALL ``token_lists``.
+
+    Algorithm: index only length-``min_length`` n-grams per sample (O(n)
+    memory per sample, not O(n^2)), intersect the keys across samples to get
+    candidate anchors, then greedily extend each sample-0 occurrence rightward
+    while every other sample has an occurrence of the current n-gram whose
+    next token matches. Candidate positions are
+    filtered as we extend, so total work is bounded by the matched length
+    summed across candidates.
+    """
+    if not token_lists or min_length < 1:
         return []
-    common = _get_contiguous_sequences(token_lists[0], min_length)
-    for tl in token_lists[1:]:
-        common &= _get_contiguous_sequences(tl, min_length)
-        if not common:
+    if any(len(tl) < min_length for tl in token_lists):
+        return []
+
+    k = len(token_lists)
+    per_sample = [_ngram_positions(tl, min_length) for tl in token_lists]
+
+    common_keys = set(per_sample[0].keys())
+    for pm in per_sample[1:]:
+        common_keys &= pm.keys()
+        if not common_keys:
             return []
-    return [list(s) for s in common]
+
+    tl0 = token_lists[0]
+    results: set[tuple[str, ...]] = set()
+    for ngram in common_keys:
+        for start0 in per_sample[0][ngram]:
+            # Current matching positions for samples 1..k-1. Sample 0 is anchored
+            # at ``start0`` — we only need the other samples' cursors.
+            others = [list(per_sample[i][ngram]) for i in range(1, k)]
+            length = min_length
+            while start0 + length < len(tl0):
+                next_tok = tl0[start0 + length]
+                new_others: list[list[int]] = []
+                all_extend = True
+                for i, positions in enumerate(others, start=1):
+                    tl = token_lists[i]
+                    kept = [
+                        p
+                        for p in positions
+                        if p + length < len(tl) and tl[p + length] == next_tok
+                    ]
+                    if not kept:
+                        all_extend = False
+                        break
+                    new_others.append(kept)
+                if not all_extend:
+                    break
+                others = new_others
+                length += 1
+            results.add(tuple(tl0[start0 : start0 + length]))
+
+    return [list(s) for s in results]
 
 
 def _filter_maximal_sequences(seqs: list[list[str]]) -> list[list[str]]:
@@ -86,30 +129,69 @@ def _replace_sequences_in_tokens(
     A window is only replaced when both the token strings AND ids match the
     sequence — this guards against (rare) cases where two samples share a
     string subsequence but have different ids for those positions.
+
+    Optimized: index sequences by their first (token, id) pair so the common
+    case (no match) is O(1) per token instead of O(n_sequences).
     """
+    if not sequences:
+        return list(tokens)
+
+    # Sort descending by length so longer matches win over shorter ones that
+    # share a prefix.
     sorted_seqs = sorted(sequences, key=lambda s: s.n_tokens, reverse=True)
 
+    # Pre-extract per-sequence parallel token-string and id arrays for fast
+    # comparison (avoids attribute lookups in the hot loop).
+    seq_info: list[tuple[Sequence, list[str | None], list[int], int]] = [
+        (s, [t.token for t in s.tokens], [t.id for t in s.tokens], s.n_tokens)
+        for s in sorted_seqs
+    ]
+
+    # Index by (first_token, first_id) so we only enter the match loop when
+    # the current position could possibly start one of our sequences.
+    first_index: dict[tuple[str | None, int], list[int]] = {}
+    for idx, (_, toks, ids, _) in enumerate(seq_info):
+        first_index.setdefault((toks[0], ids[0]), []).append(idx)
+
     new_tokens: list[Token] = []
+    n = len(tokens)
     i = 0
-    while i < len(tokens):
+    while i < n:
+        tok = tokens[i]
+        # Ref tokens and extras-carrying tokens never start a match.
+        if tok.is_sequence_ref or _has_extra_fields(tok):
+            new_tokens.append(tok)
+            i += 1
+            continue
+        key = (tok.token, tok.id)
+        candidates = first_index.get(key)
+        if not candidates:
+            new_tokens.append(tok)
+            i += 1
+            continue
+
         matched = False
-        for seq in sorted_seqs:
-            seq_len = seq.n_tokens
-            if i + seq_len > len(tokens):
+        for cand_idx in candidates:
+            seq, seq_toks, seq_ids, seq_len = seq_info[cand_idx]
+            if i + seq_len > n:
                 continue
-            window = tokens[i : i + seq_len]
-            if any(_has_extra_fields(t) or t.is_sequence_ref for t in window):
-                continue
-            if [t.token for t in window] != [s.token for s in seq.tokens]:
-                continue
-            if [t.id for t in window] != [s.id for s in seq.tokens]:
-                continue
-            new_tokens.append(Token(id=-1, sequence_id=seq.id))
-            i += seq_len
-            matched = True
-            break
+            # Walk the window, bailing out early on mismatch / disqualifier.
+            ok = True
+            for j in range(seq_len):
+                w = tokens[i + j]
+                if w.is_sequence_ref or _has_extra_fields(w):
+                    ok = False
+                    break
+                if w.token != seq_toks[j] or w.id != seq_ids[j]:
+                    ok = False
+                    break
+            if ok:
+                new_tokens.append(Token(id=-1, sequence_id=seq.id))
+                i += seq_len
+                matched = True
+                break
         if not matched:
-            new_tokens.append(tokens[i])
+            new_tokens.append(tok)
             i += 1
     return new_tokens
 
@@ -124,10 +206,15 @@ def deduplicate_sequences(
     Captured Sequences store both the token strings and the original token ids
     so a downstream expansion (e.g. when interpretability outputs are attached
     to ref-internal positions) can restore the exact ids.
+
+    Returns a new document; the input is not modified, and mutable token state
+    is not shared with the returned document.
     """
     doc = doc.model_copy(deep=True)
 
     if not doc.samples:
+        # Nothing to do, but return a new doc to preserve the "no mutation"
+        # contract callers rely on.
         return doc
 
     token_lists = [[s for s, _ in _clean_pairs(sample)] for sample in doc.samples]
@@ -141,6 +228,7 @@ def deduplicate_sequences(
         return doc
 
     existing_ids = {s.id for s in doc.sequences}
+    new_sequences: list[Sequence] = []
     next_idx = 0
     for seq_tokens in maximal:
         seq_ids = _capture_ids_for_sequence(doc.samples[0], seq_tokens)
@@ -154,43 +242,55 @@ def deduplicate_sequences(
         seq_id = f"seq_{next_idx}"
         existing_ids.add(seq_id)
 
-        seq = Sequence(
-            id=seq_id,
-            n_tokens=len(seq_tokens),
-            tokens=[
-                Token(id=tid, token=tstr)
-                for tid, tstr in zip(seq_ids, seq_tokens)
-            ],
+        new_sequences.append(
+            Sequence(
+                id=seq_id,
+                n_tokens=len(seq_tokens),
+                tokens=[
+                    Token(id=tid, token=tstr) for tid, tstr in zip(seq_ids, seq_tokens)
+                ],
+            )
         )
-        doc.sequences.append(seq)
         next_idx += 1
 
-    for sample in doc.samples:
-        sample.tokens = _replace_sequences_in_tokens(sample.tokens, doc.sequences)
+    all_sequences = list(doc.sequences) + new_sequences
 
-    return doc
+    new_samples = [
+        sample.model_copy(
+            update={
+                "tokens": _replace_sequences_in_tokens(sample.tokens, all_sequences)
+            }
+        )
+        for sample in doc.samples
+    ]
+
+    return doc.model_copy(update={"samples": new_samples, "sequences": all_sequences})
 
 
 def expand_sequences(doc: InifDocument) -> InifDocument:
-    """Expand all sequence references back to flat tokens with original ids."""
+    """Expand all sequence references back to flat tokens with original ids.
+
+    Returns a new document whose tokens are independent from ``doc``.
+    """
     doc = doc.model_copy(deep=True)
     seq_map = doc.sequence_map
+
+    new_samples: list[Sample] = []
     for sample in doc.samples:
         new_tokens: list[Token] = []
         for token in sample.tokens:
-            if token.is_sequence_ref:
-                assert token.sequence_id is not None, (
-                    "Sequence ref token must have sequence_id"
-                )
-                assert token.sequence_id in seq_map, (
-                    f"Sequence '{token.sequence_id}' not found"
-                )
-                seq = seq_map[token.sequence_id]
-                for t in seq.tokens:
-                    new_tokens.append(
-                        Token(id=t.id, token=t.token, sequence_id=seq.id)
-                    )
-            else:
+            if not token.is_sequence_ref:
                 new_tokens.append(token)
-        sample.tokens = new_tokens
-    return doc
+                continue
+            assert token.sequence_id is not None, (
+                "Sequence ref token must have sequence_id"
+            )
+            assert token.sequence_id in seq_map, (
+                f"Sequence '{token.sequence_id}' not found"
+            )
+            seq = seq_map[token.sequence_id]
+            for t in seq.tokens:
+                new_tokens.append(Token(id=t.id, token=t.token, sequence_id=seq.id))
+        new_samples.append(sample.model_copy(update={"tokens": new_tokens}))
+
+    return doc.model_copy(update={"samples": new_samples})

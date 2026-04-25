@@ -5,6 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from inif.converters._decode import (
+    ByteSliceDecoder,
+    decode_token_ids,
+    has_byte_level_decoder,
+    offset_mapping_decode_text,
+)
 from inif.models import (
     InifDocument,
     Metadata,
@@ -34,10 +40,28 @@ def _load_tokenizer(tokenizer: Any) -> Any:
     return tokenizer
 
 
-def _tokenize_text(text: str, tokenizer: Any) -> tuple[list[int], list[str]]:
-    """Tokenize text and return (token_ids, token_strings)."""
-    ids = tokenizer.encode(text, add_special_tokens=False)
-    strings = [tokenizer.decode([tid]) for tid in ids]
+def _tokenize_text(
+    text: str,
+    tokenizer: Any,
+    decode_cache: dict[int, str] | None = None,
+    byte_decoder: ByteSliceDecoder | None = None,
+) -> tuple[list[int], list[str]]:
+    """Tokenize text and return (token_ids, token_strings).
+
+    ``decode_cache`` (optional, caller-shared across samples) memoizes
+    per-id decodes. Tokens repeat heavily in natural text, so hitting the
+    cache cuts tokenizer calls by an order of magnitude on multi-sample runs.
+    """
+    ids = list(tokenizer.encode(text, add_special_tokens=False))
+    strings = offset_mapping_decode_text(text, ids, tokenizer)
+    if strings is not None:
+        return ids, strings
+    strings = decode_token_ids(
+        ids,
+        tokenizer,
+        decode_cache=decode_cache,
+        byte_decoder=byte_decoder,
+    )
     return ids, strings
 
 
@@ -82,26 +106,50 @@ def from_texts(
 
     samples = []
     chat_messages: list[list[dict[str, str]] | None] = []
+    # Shared decode cache across all samples — tokens repeat heavily in real
+    # corpora, so memoizing the per-id decode turns ~n calls into ~unique(n).
+    decode_cache: dict[int, str] = {}
+    byte_decoder = ByteSliceDecoder(tok) if has_byte_level_decoder(tok) else None
     for i, item in enumerate(texts):
         sid = sample_ids[i] if sample_ids else f"sample_{i}"
         if _is_chat_input(item):
             assert hasattr(tok, "apply_chat_template"), (
                 "tokenizer must support apply_chat_template for chat inputs"
             )
-            token_ids = tok.apply_chat_template(
-                item,
-                tokenize=True,
-                add_generation_prompt=False,
-                return_dict=False,
+            token_ids = list(
+                tok.apply_chat_template(
+                    item,
+                    tokenize=True,
+                    add_generation_prompt=False,
+                    return_dict=False,
+                )
             )
+            formatted = tok.apply_chat_template(
+                item,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            pieces = offset_mapping_decode_text(formatted, token_ids, tok)
+            if pieces is None:
+                pieces = decode_token_ids(
+                    token_ids,
+                    tok,
+                    decode_cache=decode_cache,
+                    byte_decoder=byte_decoder,
+                    strict_roundtrip=True,
+                )
             tokens = [
-                Token(id=tid, token=tok.decode([tid], skip_special_tokens=False))
-                for tid in token_ids
+                Token(id=tid, token=piece) for tid, piece in zip(token_ids, pieces)
             ]
             sample_texts = [msg["content"] for msg in item]
             chat_messages.append(item)
         else:
-            ids, strings = _tokenize_text(item, tok)
+            ids, strings = _tokenize_text(
+                item,
+                tok,
+                decode_cache=decode_cache,
+                byte_decoder=byte_decoder,
+            )
             tokens = [Token(id=tid, token=tstr) for tid, tstr in zip(ids, strings)]
             sample_texts = [item]
             chat_messages.append(None)

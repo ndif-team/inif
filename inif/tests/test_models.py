@@ -304,6 +304,25 @@ def test_document_subset_preserves_metadata_and_is_independent():
     assert "new" not in doc.samples[0].metadata
 
 
+def test_document_subset_deep_copies_tokens_and_sequences():
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="t")),
+        sequences=[
+            Sequence(id="seq", tokens=[Token(id=1, token="a")], n_tokens=1),
+        ],
+        samples=[
+            Sample(id="x", tokens=[Token(id=-1, sequence_id="seq")]),
+        ],
+    )
+
+    sub = doc.subset(lambda s: s.id == "x")
+    sub.samples[0].tokens[0].set_extra("note", "sample")
+    sub.sequences[0].tokens[0].add_tag("sequence")
+
+    assert not doc.samples[0].tokens[0].has_extra("note")
+    assert not doc.sequences[0].tokens[0].has_tag("sequence")
+
+
 def test_metadata_created_at_is_datetime():
     """``created_at`` strings round-trip into datetime objects via pydantic."""
     from datetime import datetime, timezone

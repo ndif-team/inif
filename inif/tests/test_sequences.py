@@ -21,6 +21,29 @@ def test_deduplicate_basic(doc_for_dedup):
         assert sample.tokens[0].sequence_id == seq.id
 
 
+def test_deduplicate_extends_later_anchor_occurrence():
+    """All sample-0 anchor occurrences must be considered for maximal matches."""
+    ids = {"a": 1, "b": 2, "x": 3, "c": 4}
+
+    def toks(names):
+        return [Token(id=ids[name], token=name) for name in names]
+
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="test")),
+        samples=[
+            Sample(id="s0", tokens=toks(["a", "b", "x", "a", "b", "c"])),
+            Sample(id="s1", tokens=toks(["a", "b", "c"])),
+        ],
+    )
+
+    deduped = deduplicate_sequences(doc, min_length=2)
+
+    assert len(deduped.sequences) == 1
+    assert [t.token for t in deduped.sequences[0].tokens] == ["a", "b", "c"]
+    assert deduped.samples[0].tokens[-1].is_sequence_ref
+    assert deduped.samples[1].tokens[0].is_sequence_ref
+
+
 def test_expand_basic(doc_for_dedup):
     deduped = deduplicate_sequences(doc_for_dedup, min_length=3)
     expanded = expand_sequences(deduped)
@@ -76,6 +99,23 @@ def test_dedup_preserves_extra_field_tokens():
     # (excluding extra-field tokens) is ["a", "c"], the 3-gram "a","b","c"
     # won't be found in s0's clean list. No dedup.
     assert len(deduped.sequences) == 0
+
+
+def test_deduplicate_returns_independent_tokens():
+    """Mutating a returned doc must not mutate the source doc."""
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="test")),
+        samples=[
+            Sample(id="s0", tokens=[Token(id=1, token="a")]),
+            Sample(id="s1", tokens=[Token(id=2, token="b")]),
+        ],
+    )
+
+    deduped = deduplicate_sequences(doc, min_length=2)
+    deduped.samples[0].tokens[0].add_tag("changed")
+
+    assert deduped.samples[0].tokens[0].has_tag("changed")
+    assert not doc.samples[0].tokens[0].has_tag("changed")
 
 
 def test_dedup_no_duplicates():

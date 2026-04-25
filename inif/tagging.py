@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from enum import Enum
 from typing import Any, Callable
 
+from inif._token_ops import (
+    PredicateTag,
+    apply_predicate_tags,
+    apply_regex_tags,
+    compile_regex_tags,
+)
 from inif.models import InifDocument, Sample, Sequence, Span, Token
 
 
@@ -34,27 +41,35 @@ def tag_by_regex(
     materialized in this sample (per-token information attaches to real
     Tokens; other refs and other samples are untouched).
     """
-    compiled = re.compile(pattern)
-    if not sequences:
-        for token in sample.tokens:
-            if token.token is not None and compiled.search(token.token):
-                token.add_tag(tag)
-        return
+    tag_by_regexes(sample, [(pattern, tag)], sequences=sequences)
 
-    expanded = sample.get_expanded_tokens(sequences)
-    matching_positions = [
-        i
-        for i, t in enumerate(expanded)
-        if t.token is not None and compiled.search(t.token)
-    ]
-    for pos in matching_positions:
-        _, real_token = sample.materialize_position(pos, sequences)
-        real_token.add_tag(tag)
+
+def tag_by_regexes(
+    sample: Sample,
+    regex_tags: list[tuple[str | re.Pattern[str], str]],
+    sequences: list[Sequence] | None = None,
+) -> None:
+    """Apply multiple regex taggers in one token pass.
+
+    This is the preferred API for large documents when several regex-based
+    strategies are known up front. If ``sequences`` is provided, sequence refs
+    are materialized only when at least one expanded token actually matches.
+    """
+    apply_regex_tags(sample, compile_regex_tags(regex_tags), sequences=sequences)
 
 
 def tag_by_regex_all(doc: InifDocument, pattern: str, tag: str) -> None:
+    tag_by_regexes_all(doc, [(pattern, tag)])
+
+
+def tag_by_regexes_all(
+    doc: InifDocument,
+    regex_tags: list[tuple[str | re.Pattern[str], str]],
+) -> None:
+    """Apply multiple regex taggers across all samples in one pass per sample."""
+    compiled = compile_regex_tags(regex_tags)
     for sample in doc.samples:
-        tag_by_regex(sample, pattern, tag, doc.sequences)
+        apply_regex_tags(sample, compiled, doc.sequences or None)
 
 
 def tag_by_text_regex(
@@ -88,18 +103,26 @@ def tag_by_text_regex(
     joined = "".join(token_strings)
 
     offsets: list[tuple[int, int]] = []
+    starts: list[int] = []
+    ends: list[int] = []
     pos = 0
     for s in token_strings:
-        offsets.append((pos, pos + len(s)))
-        pos += len(s)
+        start, end = pos, pos + len(s)
+        offsets.append((start, end))
+        starts.append(start)
+        ends.append(end)
+        pos = end
 
     for m in compiled.finditer(joined):
         m_start, m_end = m.start(), m.end()
-        matching_indices = [
-            i
-            for i, (t_start, t_end) in enumerate(offsets)
-            if t_end > m_start and t_start < m_end
-        ]
+        if m_start == m_end:
+            continue
+        first = bisect_right(ends, m_start)
+        matching_indices: list[int] = []
+        i = first
+        while i < len(offsets) and starts[i] < m_end:
+            matching_indices.append(i)
+            i += 1
         if not matching_indices:
             continue
         if mode is TextTagMode.FIRST:
@@ -125,9 +148,25 @@ def tag_by_text_regex_all(
 def tag_by_predicate(
     sample: Sample, predicate: Callable[[Token], bool], tag: str
 ) -> None:
-    for token in sample.tokens:
-        if predicate(token):
-            token.add_tag(tag)
+    tag_by_predicates(sample, [(predicate, tag)])
+
+
+def tag_by_predicates(
+    sample: Sample,
+    predicate_tags: list[PredicateTag],
+    sequences: list[Sequence] | None = None,
+) -> None:
+    """Apply multiple Python predicate taggers in one token pass."""
+    apply_predicate_tags(sample, predicate_tags, sequences=sequences)
+
+
+def tag_by_predicates_all(
+    doc: InifDocument,
+    predicate_tags: list[PredicateTag],
+) -> None:
+    """Apply multiple Python predicate taggers across all samples."""
+    for sample in doc.samples:
+        apply_predicate_tags(sample, predicate_tags, doc.sequences or None)
 
 
 def tag_positions(sample: Sample, positions: list[int], tag: str) -> None:

@@ -676,6 +676,32 @@ def test_render_html_seq_ref_expanded_into_individual_tokens():
     assert "\u00b7end" in html
 
 
+def test_render_html_seq_ref_expanded_uses_real_token_ids():
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="seq_ids")),
+        sequences=[
+            Sequence(
+                id="s0",
+                n_tokens=2,
+                tokens=[Token(id=11, token="a"), Token(id=12, token="b")],
+            ),
+        ],
+        samples=[
+            Sample(
+                id="x0",
+                tokens=[Token(id=-1, sequence_id="s0")],
+            ),
+        ],
+    )
+
+    html = render_html(doc)
+
+    assert html.count('class="inif-token seq-ref"') == 2
+    assert 'data-token-id="11"' in html
+    assert 'data-token-id="12"' in html
+    assert 'data-token-id="-1"' not in html
+
+
 def test_render_html_seq_ref_wraps_like_normal_tokens():
     """Expanded seq-ref tokens are inline-block spans that can wrap."""
     doc = InifDocument(

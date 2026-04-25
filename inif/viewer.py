@@ -61,7 +61,7 @@ _EXTRA_PALETTE = [
 ]
 
 # Token dict keys that do NOT produce an underline
-_EXTRA_SKIP = {"id", "token", "seq_id", "sequence_id", "role", "tags"}
+_EXTRA_SKIP = {"id", "token", "seq_id", "sequence_id", "role", "tags", "_seq_ref"}
 
 
 def _detect_newline_chars(tokenizer: Any) -> frozenset[str]:
@@ -681,10 +681,10 @@ def _render_token(
     tok_id = tok_data.get("id", 0)
     tok_str = tok_data.get("token") or ""
     seq_id = tok_data.get("seq_id") or tok_data.get("sequence_id")
-    is_ref = tok_id < 0
+    is_ref = tok_id < 0 or bool(tok_data.get("_seq_ref"))
 
     # Extra fields for tooltip (exclude id, token, seq_id/sequence_id)
-    skip = ("id", "token", "seq_id", "sequence_id")
+    skip = ("id", "token", "seq_id", "sequence_id", "_seq_ref")
     extra = {k: v for k, v in tok_data.items() if k not in skip}
     tooltip_json = html.escape(json.dumps(extra, default=str), quote=True)
 
@@ -796,9 +796,10 @@ def _render_token_strip(
                 for sub_tok in seq_toks:
                     sub_str = sub_tok.get("token") or ""
                     sub = {
-                        "id": tok_id,
+                        "id": sub_tok.get("id", tok_id),
                         "token": sub_str,
                         "seq_id": seq_id,
+                        "_seq_ref": True,
                     }
                     parts.append(
                         _render_token(

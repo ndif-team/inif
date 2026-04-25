@@ -238,6 +238,44 @@ def test_from_eval_log_with_tokenizer():
     assert doc.samples[0].texts[0] == "AB"
 
 
+def test_from_eval_log_min_sequence_length_controls_dedup():
+    class CharTokenizer:
+        def encode(self, text, add_special_tokens=False):
+            return [ord(c) for c in text]
+
+        def decode(self, ids, skip_special_tokens=False):
+            return "".join(chr(i) for i in ids)
+
+    samples = [
+        _make_sample([_make_message("user", "ab0")], sample_id=0),
+        _make_sample([_make_message("user", "ab1")], sample_id=1),
+    ]
+    log = _make_eval_log(samples=samples)
+
+    doc_min_2 = from_eval_log(
+        log,
+        tokenizer=CharTokenizer(),
+        deduplicate=True,
+        min_sequence_length=2,
+        tag_chat_roles=False,
+        tag_generated=False,
+        extract_logprobs=False,
+    )
+    doc_min_3 = from_eval_log(
+        log,
+        tokenizer=CharTokenizer(),
+        deduplicate=True,
+        min_sequence_length=3,
+        tag_chat_roles=False,
+        tag_generated=False,
+        extract_logprobs=False,
+    )
+
+    assert len(doc_min_2.sequences) == 1
+    assert [t.token for t in doc_min_2.sequences[0].tokens] == ["a", "b"]
+    assert len(doc_min_3.sequences) == 0
+
+
 def test_extract_message_dicts():
     """_extract_message_dicts converts Inspect message objects to plain dicts."""
     messages = [

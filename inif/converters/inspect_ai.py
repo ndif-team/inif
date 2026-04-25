@@ -4,6 +4,12 @@ import importlib.metadata
 from datetime import datetime, timezone
 from typing import Any
 
+from inif.converters._decode import (
+    ByteSliceDecoder,
+    decode_token_ids,
+    has_byte_level_decoder,
+    offset_mapping_decode_text,
+)
 from inif.models import (
     InifDocument,
     Metadata,
@@ -92,9 +98,46 @@ def _extract_message_dicts(messages: list[Any]) -> list[dict[str, str]]:
     return result
 
 
+def _offset_mapping_decode(
+    messages: list[dict[str, str]],
+    tokenizer: Any,
+) -> tuple[list[int], list[str]] | None:
+    """Decode via ``return_offsets_mapping`` if the tokenizer supports it.
+
+    Fast tokenizers (most HF-fast SentencePiece + BPE variants) expose byte
+    offsets from a single ``tokenizer(text, return_offsets_mapping=True)``
+    call, so we can slice per-token strings directly from the formatted chat
+    template — bulletproof even when the tokenizer's decode path is lossy.
+
+    Returns ``(ids, pieces)`` on success (``"".join(pieces) == formatted``)
+    or ``None`` if offsets aren't supported / the re-tokenized ids don't
+    match ``apply_chat_template(tokenize=True)`` (template-internal
+    normalization). The caller should try the next tier on ``None``.
+    """
+    if not hasattr(tokenizer, "apply_chat_template"):
+        return None
+    try:
+        ids_from_template = tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=False, return_dict=False
+        )
+        formatted = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=False
+        )
+    except (TypeError, KeyError, ValueError):
+        return None
+
+    pieces = offset_mapping_decode_text(formatted, list(ids_from_template), tokenizer)
+    if pieces is None:
+        return None
+    return list(ids_from_template), pieces
+
+
 def _messages_to_tokens(
     messages: list[dict[str, str]],
     tokenizer: Any | None = None,
+    decode_cache: dict[int, str] | None = None,
+    byte_decoder: "ByteSliceDecoder | None" = None,
+    use_offset_mapping: bool = True,
 ) -> tuple[list[str], list[Token]]:
     """Convert message dicts to plain text strings and Tokens.
 
@@ -106,6 +149,29 @@ def _messages_to_tokens(
     ``tag_chat_roles_doc``.
 
     Returns (texts, tokens).
+
+    Three-tier decode strategy (in order of preference):
+
+    1. **offset_mapping** (HF fast tokenizers that support it — most fast
+       SentencePiece + BPE): per-token strings are exact slices of the
+       formatted chat template, so ``"".join(token.token) == formatted``
+       for every sample, no matter which chars appear. Tried first; on
+       mismatch with template-internal ids we move on.
+
+    2. **byte-slice** (byte-level BPE without offset support, e.g. Kimi's
+       tiktoken variant): reconstruct per-token bytes via
+       ``tokenizer.byte_decoder`` + ``encoder`` (no decode calls), decode
+       the whole byte stream once, attribute each char to the token whose
+       byte range contains the char's last byte. Also bulletproof.
+
+    3. **per-token decode with cache** (fallback for tokenizers with
+       neither of the above — mostly old SentencePiece slow tokenizers):
+       ``tokenizer.decode([tid])`` returns U+FFFD when a multi-byte char
+       is split across BPE tokens. ``tag_chat_roles`` silently skips
+       those samples.
+
+    Callers supply ``byte_decoder`` (shared across samples of one archive)
+    and / or ``decode_cache`` (same) to amortize per-id work.
     """
     texts = [msg["content"] for msg in messages]
     tokens: list[Token] = []
@@ -114,26 +180,38 @@ def _messages_to_tokens(
         return texts, tokens
 
     if hasattr(tokenizer, "apply_chat_template"):
+        if use_offset_mapping:
+            result = _offset_mapping_decode(messages, tokenizer)
+            if result is not None:
+                ids, pieces = result
+                for tid, piece in zip(ids, pieces):
+                    tokens.append(Token(id=tid, token=piece))
+                return texts, tokens
+
         token_ids = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=False, return_dict=False
         )
-        # Incremental decode: a BPE token may carry only part of a multi-byte
-        # UTF-8 character (e.g. θ, ‒, ). ``decode([tid])`` in isolation
-        # returns the replacement char (�) for such bytes, which breaks the
-        # round-trip check in ``tag_chat_roles``. Decoding the growing prefix
-        # lets the tokenizer merge partial bytes and splits the full string
-        # back into per-token pieces that concatenate to the chat template
-        # exactly.
-        prev_decoded = ""
-        prev_len = 0
-        for i, tid in enumerate(token_ids):
-            cur_decoded = tokenizer.decode(
-                token_ids[: i + 1], skip_special_tokens=False
+        try:
+            pieces = decode_token_ids(
+                list(token_ids),
+                tokenizer,
+                decode_cache=decode_cache,
+                byte_decoder=byte_decoder,
+                strict_roundtrip=True,
             )
-            token_str = cur_decoded[prev_len:]
-            tokens.append(Token(id=tid, token=token_str))
-            prev_decoded = cur_decoded
-            prev_len = len(prev_decoded)
+        except ValueError as e:
+            raise ValueError(
+                "Per-token decode does not round-trip to the full decode: "
+                f"{type(tokenizer).__name__} does not support "
+                "``return_offsets_mapping`` and does not expose byte-level "
+                "BPE internals (``encoder`` + ``byte_decoder``), so INIF "
+                "cannot produce reliable per-token strings for content "
+                "containing multi-byte UTF-8 characters split across tokens. "
+                "Use a tokenizer that supports either mechanism, or strip the "
+                "problematic characters before tokenizing."
+            ) from e
+        for tid, piece in zip(token_ids, pieces):
+            tokens.append(Token(id=tid, token=piece))
     else:
         for msg in messages:
             text = msg["content"]
@@ -278,6 +356,7 @@ def from_eval_log(
     tokenizer: Any = None,
     include_messages: bool = True,
     deduplicate: bool = True,
+    min_sequence_length: int = 3,
     tag_chat_roles: bool = True,
     tag_generated: bool = True,
     extract_logprobs: bool = True,
@@ -292,6 +371,7 @@ def from_eval_log(
             skipped (messages still produce ``texts`` but no ``tokens``).
         include_messages: Whether to include message-level text segments.
         deduplicate: Whether to run sequence deduplication.
+        min_sequence_length: Minimum length for common sequence detection.
         tag_chat_roles: Whether to add 'role' extra field to tokens.
         tag_generated: Whether to tag the model's response tokens with
             ``"generated"``. The response is the last assistant message.
@@ -322,6 +402,28 @@ def from_eval_log(
     samples: list[Sample] = []
     inspect_samples: list[Any] = []
     all_msg_dicts: list[list[dict[str, str]]] = []
+    # Decide per-archive how to decode tokens into per-token strings so the
+    # concat always matches the tokenizer's full-sequence decode. The order
+    # of preference is (1) offset_mapping, (2) byte-slice, (3) per-token
+    # decode with cache — see ``_messages_to_tokens`` docstring. We only
+    # probe each candidate once and reuse the decision across samples.
+    byte_decoder: ByteSliceDecoder | None = None
+    decode_cache: dict[int, str] | None = None
+    use_offset_mapping = False
+    if tokenizer is not None and eval_log.samples:
+        first_msgs: list[dict[str, str]] = []
+        probe_sample = next(
+            (s for s in eval_log.samples if getattr(s, "messages", None)),
+            None,
+        )
+        if probe_sample is not None:
+            first_msgs = _extract_message_dicts(probe_sample.messages)
+        if first_msgs and _offset_mapping_decode(first_msgs, tokenizer) is not None:
+            use_offset_mapping = True
+        elif has_byte_level_decoder(tokenizer):
+            byte_decoder = ByteSliceDecoder(tokenizer)
+        else:
+            decode_cache = {}
     if eval_log.samples:
         for i, inspect_sample in enumerate(eval_log.samples):
             sample_id_raw = getattr(inspect_sample, "id", i)
@@ -343,7 +445,13 @@ def from_eval_log(
             msg_dicts: list[dict[str, str]] = []
             if include_messages and hasattr(inspect_sample, "messages"):
                 msg_dicts = _extract_message_dicts(inspect_sample.messages)
-                texts, sample_tokens = _messages_to_tokens(msg_dicts, tokenizer)
+                texts, sample_tokens = _messages_to_tokens(
+                    msg_dicts,
+                    tokenizer,
+                    decode_cache=decode_cache,
+                    byte_decoder=byte_decoder,
+                    use_offset_mapping=use_offset_mapping,
+                )
             all_msg_dicts.append(msg_dicts)
             inspect_samples.append(inspect_sample)
 
@@ -394,7 +502,7 @@ def from_eval_log(
     )
 
     if deduplicate and tokenizer is not None:
-        doc = deduplicate_sequences(doc)
+        doc = deduplicate_sequences(doc, min_length=min_sequence_length)
 
     if tag_chat_roles and tokenizer is not None:
         from inif.tagging import tag_chat_roles_doc
