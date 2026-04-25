@@ -34,8 +34,10 @@ Research-oriented library. Follow nnterp conventions:
 - `tagging.py` — Regex-based auto-tagging, span creation
 - `sequences.py` — Sequence deduplication (lmout-style set-intersection) and expansion
 - `converters/inspect_ai.py` — Inspect AI EvalLog converter
+- `converters/evaleval.py` — every_eval_ever (EEE) instance-level → `InifDocument`
+- `converters/_tokenize.py` — shared `apply_chat_template` → `Token` helpers (used by both eval converters)
 - `converters/text.py` — Raw text file / string processing
-- `cli.py` — CLI entry point (`inif convert txt`, `inif convert eval`)
+- `cli.py` — CLI entry point (`inif convert txt`, `inif convert eval`, `inif convert evaleval`)
 
 ## Key Conventions
 
@@ -61,6 +63,16 @@ Research-oriented library. Follow nnterp conventions:
 - **`tag_generated=True`** (default): tokens belonging to the LAST assistant message are tagged `"generated"`. Identification uses character-span matching against `apply_chat_template` output, so it works for any HuggingFace chat template.
 - **`extract_logprobs=True`** (default): per-token logprobs from `inspect_sample.output.choices[0].logprobs.content` are attached to the response tokens via `set_extra("logprob", ...)`. Best-effort: skipped silently when the eval-source tokenization disagrees with our tokenizer on token count.
 - **`filter_samples_by_score(doc, scorer, predicate)`** returns `list[Sample]` (compose with the position selectors). The old `select_by_score` is gone.
+
+## Evaleval converter conventions
+
+- **Schema**: targets `instance_level_eval_0.2.2` from `evaleval/every_eval_ever`. Trusted as-is — users who want jsonschema validation should run it themselves against the upstream schema before calling the converter.
+- **Three entry points** in `inif/converters/evaleval.py`: `from_instance_records(records, aggregate=None, ...)` (core), `from_eval_json(aggregate_path, instances_path, ...)` (local JSON / JSONL), `from_hf_dataset(config, split="samples", aggregate_config=None, limit=None, ...)` (streams rows from `evaleval/EEE_datastore`).
+- **Interaction types**: `single_turn` synthesises `user` + `assistant` messages; `multi_turn` / `agentic` use the `messages[]` array directly, ordered by `turn_idx`. `tool_calls` are rendered into assistant content as `<tool_call name=… args={…}/>` so the invocations survive tokenization.
+- **Reasoning traces**: when `tag_reasoning=True` (default), reasoning-trace tokens are char-span tagged with `"reasoning"`. Best-effort: silently skipped when the tokenizer's per-token decode doesn't round-trip to `apply_chat_template`.
+- **Score**: `SampleScore` is built from `evaluation.score` (`scorer = evaluation_name`). The terminal `answer_attribution` entry feeds `SampleScore.answer`; non-terminal entries land in `Sample.metadata["intermediate_answers"]`.
+- **Metadata mapping**: `token_usage.input_tokens`/`output_tokens` → `Sample.input_tokens`/`output_tokens`; `performance`, `error`, `interaction_type`, per-sample `metadata`, `num_turns`, `tool_calls_count`, `reasoning_tokens` → `Sample.metadata`. Aggregate record (when supplied) contributes `Metadata.extra["inference"]`, `["eval_library"]`, `["metric_config"]`, `["aggregate_score"]`.
+- **Optional extra**: `pip install inif[evaleval]` pulls `datasets` (imported lazily inside `from_hf_dataset`).
 
 ## IO conventions
 

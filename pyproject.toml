@@ -24,6 +24,7 @@ dependencies = [
 ]
 [project.optional-dependencies]
 inspect = ["inspect-ai"]
+evaleval = ["datasets"]
 
 [project.scripts]
 inif = "inif.cli:main"

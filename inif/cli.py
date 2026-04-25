@@ -95,6 +95,48 @@ def _convert_eval(args: argparse.Namespace) -> None:
         print(f"Saved to {output}")
 
 
+def _convert_evaleval(args: argparse.Namespace) -> None:
+    from inif.converters.evaleval import from_eval_json, from_hf_dataset
+    from inif.io import save
+
+    kwargs: dict = {
+        "deduplicate": not args.no_dedup,
+        "min_sequence_length": args.min_seq_length,
+        "tag_chat_roles": not args.no_tag_chat_roles,
+    }
+    if args.model:
+        kwargs["tokenizer"] = args.model
+    if args.limit is not None:
+        kwargs.setdefault("limit", args.limit)
+
+    if args.hf_config:
+        doc = from_hf_dataset(
+            args.hf_config,
+            split=args.hf_split,
+            aggregate_config=args.hf_aggregate_config,
+            repo=args.hf_repo,
+            limit=args.limit,
+            **{k: v for k, v in kwargs.items() if k != "limit"},
+        )
+        default_stem = args.hf_config
+    else:
+        kwargs.pop("limit", None)
+        doc = from_eval_json(
+            args.aggregate,
+            args.input,
+            **kwargs,
+        )
+        stem = Path(args.input).stem
+        default_stem = stem.removesuffix(".jsonl").removesuffix(".json")
+
+    if args.revision:
+        doc.metadata.model.revision = args.revision
+
+    output = Path(args.output) if args.output else Path(f"{default_stem}.inif.json")
+    save(doc, output)
+    print(f"Saved to {output}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="inif",
@@ -146,6 +188,46 @@ def main(argv: list[str] | None = None) -> None:
     eval_parser.add_argument("--no-dedup", action="store_true", help="Skip dedup")
     eval_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose")
 
+    # convert evaleval
+    eee_parser = convert_sub.add_parser(
+        "evaleval",
+        help="Convert every_eval_ever instance-level JSON or EEE_datastore config",
+    )
+    eee_parser.add_argument(
+        "input",
+        nargs="?",
+        help="Instances file (.json or .jsonl). Omit when using --hf-config.",
+    )
+    eee_parser.add_argument(
+        "--aggregate", help="Optional aggregate eval.json file", default=None
+    )
+    eee_parser.add_argument(
+        "--hf-config",
+        help="Config name from evaleval/EEE_datastore, e.g. "
+        "'theory_of_mind_samples'. When given, pulls rows via HuggingFace.",
+    )
+    eee_parser.add_argument(
+        "--hf-split", default="samples", help="HF split (default: samples)"
+    )
+    eee_parser.add_argument(
+        "--hf-repo", default="evaleval/EEE_datastore", help="HF repo id"
+    )
+    eee_parser.add_argument(
+        "--hf-aggregate-config",
+        help="Paired aggregate config (non-samples counterpart)",
+    )
+    eee_parser.add_argument("--limit", type=int, help="Max instance records to convert")
+    eee_parser.add_argument("-o", "--output", help="Output path")
+    eee_parser.add_argument("-m", "--model", help="Tokenizer model name")
+    eee_parser.add_argument("--revision", help="Model revision")
+    eee_parser.add_argument("--min-seq-length", type=int, default=3, help="Min seq len")
+    eee_parser.add_argument(
+        "--no-tag-chat-roles",
+        action="store_true",
+        help="Don't add role tags to tokens",
+    )
+    eee_parser.add_argument("--no-dedup", action="store_true", help="Skip dedup")
+
     args = parser.parse_args(argv)
 
     if args.command == "view":
@@ -155,6 +237,8 @@ def main(argv: list[str] | None = None) -> None:
             _convert_txt(args)
         elif args.format == "eval":
             _convert_eval(args)
+        elif args.format == "evaleval":
+            _convert_evaleval(args)
         else:
             convert_parser.print_help()
     else:
