@@ -8,7 +8,7 @@ from inif.models import (
     InifDocument,
     Metadata,
     ModelInfo,
-    Token,
+    TokenOrSeqRef,
 )
 
 
@@ -84,7 +84,7 @@ def test_save_rejects_compress_override(doc):
 
 def test_save_load_preserves_extra_fields():
     """Verify extra fields on Token survive round-trip serialization."""
-    tok = Token(id=1, token="hello", source="user", logprob=-0.5)
+    tok = TokenOrSeqRef(id=1, token="hello", source="user", logprob=-0.5)
     tok.set_extra("data", {"logit_lens": {"layer_0": {}}})
 
     from inif.models import Sample

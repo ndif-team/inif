@@ -1,4 +1,11 @@
-from inif.models import InifDocument, Metadata, ModelInfo, Sample, Sequence, Token
+from inif.models import (
+    InifDocument,
+    Metadata,
+    ModelInfo,
+    Sample,
+    Sequence,
+    TokenOrSeqRef,
+)
 from inif.selectors import select_by_annotation
 from inif.tagging import (
     TextTagMode,
@@ -17,7 +24,7 @@ from inif.tagging import (
 )
 
 
-def _annotated_tokens(sample: Sample, name: str) -> list[Token]:
+def _annotated_tokens(sample: Sample, name: str) -> list[TokenOrSeqRef]:
     return select_by_annotation(sample, name).tokens
 
 
@@ -50,15 +57,15 @@ def test_tag_by_regex_all(doc):
             Sample(
                 id="s0",
                 tokens=[
-                    Token(id=1, token="hello"),
-                    Token(id=2, token="world"),
+                    TokenOrSeqRef(id=1, token="hello"),
+                    TokenOrSeqRef(id=2, token="world"),
                 ],
             ),
             Sample(
                 id="s1",
                 tokens=[
-                    Token(id=1, token="hello"),
-                    Token(id=3, token="there"),
+                    TokenOrSeqRef(id=1, token="hello"),
+                    TokenOrSeqRef(id=3, token="there"),
                 ],
             ),
         ],
@@ -77,9 +84,9 @@ def test_tag_by_regex_all_flat_sample_does_not_materialize(doc):
             Sample(
                 id="s0",
                 tokens=[
-                    Token(id=1, token="A"),
-                    Token(id=2, token="B"),
-                    Token(id=3, token="C"),
+                    TokenOrSeqRef(id=1, token="A"),
+                    TokenOrSeqRef(id=2, token="B"),
+                    TokenOrSeqRef(id=3, token="C"),
                 ],
             )
         ],
@@ -217,10 +224,10 @@ def test_tag_by_text_regex_subword():
     sample = Sample(
         id="bpe",
         tokens=[
-            Token(id=1, token=" E"),
-            Token(id=2, token="iff"),
-            Token(id=3, token="el"),
-            Token(id=4, token=" Tower"),
+            TokenOrSeqRef(id=1, token=" E"),
+            TokenOrSeqRef(id=2, token="iff"),
+            TokenOrSeqRef(id=3, token="el"),
+            TokenOrSeqRef(id=4, token=" Tower"),
         ],
     )
     tag_by_text_regex(sample, r"(?i)eiffel", "entity")
@@ -236,10 +243,10 @@ def test_tag_by_text_regex_first():
     sample = Sample(
         id="bpe",
         tokens=[
-            Token(id=1, token=" E"),
-            Token(id=2, token="iff"),
-            Token(id=3, token="el"),
-            Token(id=4, token=" Tower"),
+            TokenOrSeqRef(id=1, token=" E"),
+            TokenOrSeqRef(id=2, token="iff"),
+            TokenOrSeqRef(id=3, token="el"),
+            TokenOrSeqRef(id=4, token=" Tower"),
         ],
     )
     tag_by_text_regex(sample, r"(?i)eiffel", "entity", mode=TextTagMode.FIRST)
@@ -253,10 +260,10 @@ def test_tag_by_text_regex_last():
     sample = Sample(
         id="bpe",
         tokens=[
-            Token(id=1, token=" E"),
-            Token(id=2, token="iff"),
-            Token(id=3, token="el"),
-            Token(id=4, token=" Tower"),
+            TokenOrSeqRef(id=1, token=" E"),
+            TokenOrSeqRef(id=2, token="iff"),
+            TokenOrSeqRef(id=3, token="el"),
+            TokenOrSeqRef(id=4, token=" Tower"),
         ],
     )
     tag_by_text_regex(sample, r"(?i)eiffel", "entity", mode=TextTagMode.LAST)
@@ -268,7 +275,10 @@ def test_tag_by_text_regex_last():
 def test_tag_by_text_regex_no_match():
     sample = Sample(
         id="x",
-        tokens=[Token(id=1, token="hello"), Token(id=2, token=" world")],
+        tokens=[
+            TokenOrSeqRef(id=1, token="hello"),
+            TokenOrSeqRef(id=2, token=" world"),
+        ],
     )
     tag_by_text_regex(sample, r"xyz", "nope")
     assert sample.annotation_positions("nope") == []
@@ -327,7 +337,7 @@ def test_tag_chat_roles_basic():
     formatted = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=False
     )
-    tokens = [Token(id=tid, token=chr(tid)) for tid in formatted]
+    tokens = [TokenOrSeqRef(id=tid, token=chr(tid)) for tid in formatted]
     sample = Sample(id="test", tokens=tokens)
 
     tag_chat_roles(sample, messages, tokenizer)
@@ -351,7 +361,7 @@ def test_tag_chat_roles_template_tokens():
     formatted = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=False
     )
-    tokens = [Token(id=tid, token=chr(tid)) for tid in formatted]
+    tokens = [TokenOrSeqRef(id=tid, token=chr(tid)) for tid in formatted]
     sample = Sample(id="test", tokens=tokens)
 
     tag_chat_roles(sample, messages, tokenizer)
@@ -382,14 +392,14 @@ def test_tag_chat_roles_with_sequences():
     formatted = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=False
     )
-    all_tokens = [Token(id=tid, token=chr(tid)) for tid in formatted]
+    all_tokens = [TokenOrSeqRef(id=tid, token=chr(tid)) for tid in formatted]
 
     # Simulate dedup: "<s>[user]" (first 9 chars) becomes a sequence
-    seq_toks = [Token(id=t.id, token=t.token) for t in all_tokens[:9]]
+    seq_toks = [TokenOrSeqRef(id=t.id, token=t.token) for t in all_tokens[:9]]
     seq = Sequence(id="seq_0", n_tokens=len(seq_toks), tokens=seq_toks)
     # Sample has: ref + "H" + "i" + "[" + "/" + "u" + "s" + "e" + "r" + "]"
-    sample_tokens = [Token(id=-1, sequence_id="seq_0")] + [
-        Token(id=t.id, token=t.token) for t in all_tokens[9:]
+    sample_tokens = [TokenOrSeqRef(id=None, token="seq_0")] + [
+        TokenOrSeqRef(id=t.id, token=t.token) for t in all_tokens[9:]
     ]
     sample = Sample(id="test", tokens=sample_tokens)
 
@@ -416,7 +426,7 @@ def test_tag_chat_roles_doc_basic():
         formatted = tokenizer.apply_chat_template(
             msgs, tokenize=True, add_generation_prompt=False
         )
-        tokens = [Token(id=tid, token=chr(tid)) for tid in formatted]
+        tokens = [TokenOrSeqRef(id=tid, token=chr(tid)) for tid in formatted]
         samples.append(Sample(id=f"s{i}", tokens=tokens))
 
     doc = InifDocument(

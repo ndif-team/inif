@@ -75,40 +75,45 @@ InifDocument
 └── samples[]         — tokenized generation traces
     ├── tokens[]      — token id + string, plus sparse extras (logprob, logit lens, probes, ...)
     ├── annotations[] — named token ranges with optional metadata
-    ├── texts[]       — original message strings
+    ├── texts[]       — named text segments ({name, value, metadata})
     ├── spans[]       — named position ranges
     └── scores[]      — evaluation scores (scorer, value, answer)
 ```
 
-**Token ID convention**: `id >= 0` is a vocabulary token, `id == -N` references a shared `Sequence` via `sequence_id`.
+**Token convention**: each `TokenOrSeqRef` has `token: str` and an optional `id: int`. Vocabulary tokens use the integer `id`; sequence references have `id is None` and the `token` field carries the target `Sequence.id`.
 
 **Annotations**: repeated labels such as chat roles, generated output, reasoning traces, and regex matches live in `Sample.annotations` as named half-open ranges. This avoids repeating `"role": "assistant"` or `"tags": [...]` on every token in a long contiguous region.
+
+**Texts**: `Sample.texts` is a list of `Text` objects (`{name, value, metadata}`). Chat inputs are split per-message with role-based names (`"system_0"`, `"user_0"`, `"assistant_0"`, `"user_1"`, …, system prompt included); plain text inputs use index-based names (`"text_0"`, …).
 
 **Extensible tokens**: sparse per-token values such as logprobs and interpretability outputs (logit lens, probes, etc.) are stored as token extras.
 
 Use `.inif.json` for plain JSON and `.inif` for the indexed archive format. The
 archive keeps per-sample text previews in the manifest and stores each full
 sample payload as a separate compressed member, so callers can browse summaries
-without inflating token dictionaries:
+without inflating token dictionaries.
+
+The same unified read API works on both formats — pass a path with either
+suffix and the reader dispatches to the indexed-archive path or falls back to
+a full `load`:
 
 ```python
 from inif import (
     IndexedInifWriter,
-    iter_indexed_samples,
-    read_indexed_header,
-    read_indexed_sample,
-    read_indexed_samples,
-    read_indexed_sample_summaries,
+    iter_samples,
+    read_info,
+    read_samples,
     save,
 )
 
 save(doc, "traces.inif")                     # indexed archive
-header = read_indexed_header("traces.inif")  # metadata + sequences only
-summaries = read_indexed_sample_summaries("traces.inif")
-sample = read_indexed_sample("traces.inif", "sample_42")
-subset = read_indexed_samples("traces.inif", ["sample_1", "sample_7"])
+save(doc, "traces.inif.json")                # plain JSON
 
-for sample in iter_indexed_samples("traces.inif"):
+info = read_info("traces.inif")              # metadata + per-sample summaries
+sample = read_samples("traces.inif", "sample_42")[0]      # single id
+subset = read_samples("traces.inif", ["sample_1", "sample_7"])
+
+for sample in iter_samples("traces.inif.json"):           # works for both
     ...
 
 with IndexedInifWriter("streaming.inif", doc.metadata, doc.sequences) as writer:
@@ -117,10 +122,10 @@ with IndexedInifWriter("streaming.inif", doc.metadata, doc.sequences) as writer:
         writer.flush()  # make the partial archive readable
 ```
 
-The archive stores metadata and sequences once, then stores each sample as a
-separate compressed member with an uncompressed preview summary. This supports
-incremental writes, header-only reads, per-sample random access, and streaming
-iteration while preserving the same `InifDocument` model.
+The indexed archive stores metadata and sequences once, then stores each sample
+as a separate compressed member with an uncompressed preview summary. This
+supports incremental writes, header-only reads, per-sample random access, and
+streaming iteration while preserving the same `InifDocument` model.
 
 ## Key features
 

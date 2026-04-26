@@ -244,7 +244,10 @@ def test_from_instance_records_single_turn():
     assert s.target == "4"
     assert s.references == ["4"]
     assert s.interaction_type == "single_turn"
-    assert s.texts == ["What is 2+2?", "The answer is 4."]
+    assert [(t.name, t.value) for t in s.texts] == [
+        ("user_0", "What is 2+2?"),
+        ("assistant_0", "The answer is 4."),
+    ]
     # Tokens are a load-bearing INIF invariant — always populated.
     assert len(s.tokens) > 0
     assert len(s.scores) == 1

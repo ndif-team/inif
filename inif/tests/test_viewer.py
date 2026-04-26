@@ -8,7 +8,7 @@ from inif.models import (
     Sample,
     SampleScore,
     Sequence,
-    Token,
+    TokenOrSeqRef,
 )
 from inif.viewer import render_html, save_html
 
@@ -107,8 +107,8 @@ def test_render_html_multiple_samples():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="multi")),
         samples=[
-            Sample(id="s0", tokens=[Token(id=1, token="hello")]),
-            Sample(id="s1", tokens=[Token(id=2, token="world")]),
+            Sample(id="s0", tokens=[TokenOrSeqRef(id=1, token="hello")]),
+            Sample(id="s1", tokens=[TokenOrSeqRef(id=2, token="world")]),
         ],
     )
     html = render_html(doc)
@@ -125,7 +125,7 @@ def test_render_html_xss_safety():
         samples=[
             Sample(
                 id="xss",
-                tokens=[Token(id=1, token="<script>alert('xss')</script>")],
+                tokens=[TokenOrSeqRef(id=1, token="<script>alert('xss')</script>")],
             ),
         ],
     )
@@ -214,7 +214,7 @@ def test_render_html_exact_match_pass():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=1, token="hi")],
+                tokens=[TokenOrSeqRef(id=1, token="hi")],
                 scores=[SampleScore(scorer="exact_match", value=1.0)],
             ),
         ],
@@ -231,7 +231,7 @@ def test_render_html_exact_match_fail():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=1, token="hi")],
+                tokens=[TokenOrSeqRef(id=1, token="hi")],
                 scores=[SampleScore(scorer="exact_match", value=0.0)],
             ),
         ],
@@ -248,7 +248,7 @@ def test_render_html_exact_match_other_value():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=1, token="hi")],
+                tokens=[TokenOrSeqRef(id=1, token="hi")],
                 scores=[SampleScore(scorer="exact_match", value=0.5)],
             ),
         ],
@@ -268,7 +268,7 @@ def test_render_html_other_numeric_scorer_also_shows_indicator():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=1, token="hi")],
+                tokens=[TokenOrSeqRef(id=1, token="hi")],
                 scores=[SampleScore(scorer="accuracy", value=1.0)],
             ),
         ],
@@ -286,7 +286,7 @@ def test_render_html_is_correct_metadata_drives_indicator():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=1, token="hi")],
+                tokens=[TokenOrSeqRef(id=1, token="hi")],
                 scores=[
                     SampleScore(
                         scorer="theory_of_mind",
@@ -308,7 +308,7 @@ def test_render_html_non_binary_value_shows_no_indicator():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=1, token="hi")],
+                tokens=[TokenOrSeqRef(id=1, token="hi")],
                 scores=[SampleScore(scorer="bleu", value=0.72)],
             ),
         ],
@@ -332,9 +332,9 @@ def _make_annotation_doc():
             Sample(
                 id="a0",
                 tokens=[
-                    Token(id=1, token="System:"),
-                    Token(id=2, token="Hello"),
-                    Token(id=3, token="Hi"),
+                    TokenOrSeqRef(id=1, token="System:"),
+                    TokenOrSeqRef(id=2, token="Hello"),
+                    TokenOrSeqRef(id=3, token="Hi"),
                 ],
                 annotations=[
                     {"name": "system", "ranges": [(0, 1)]},
@@ -377,7 +377,7 @@ def test_render_html_no_annotations_attr():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="no_annotation")),
         samples=[
-            Sample(id="nr0", tokens=[Token(id=1, token="plain")]),
+            Sample(id="nr0", tokens=[TokenOrSeqRef(id=1, token="plain")]),
         ],
     )
     html = render_html(doc)
@@ -391,7 +391,7 @@ def test_render_html_unknown_annotation():
         samples=[
             Sample(
                 id="fb0",
-                tokens=[Token(id=1, token="x")],
+                tokens=[TokenOrSeqRef(id=1, token="x")],
                 annotations=[{"name": "custom_annotation", "ranges": [(0, 1)]}],
             )
         ],
@@ -420,7 +420,7 @@ def test_render_html_control_panel_no_annotations():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="no_annotation")),
         samples=[
-            Sample(id="nr0", tokens=[Token(id=1, token="plain")]),
+            Sample(id="nr0", tokens=[TokenOrSeqRef(id=1, token="plain")]),
         ],
     )
     html = render_html(doc)
@@ -449,7 +449,7 @@ def test_render_html_no_annotation_legend_without_annotations():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="no_annotation")),
         samples=[
-            Sample(id="nr0", tokens=[Token(id=1, token="plain")]),
+            Sample(id="nr0", tokens=[TokenOrSeqRef(id=1, token="plain")]),
         ],
     )
     html = render_html(doc)
@@ -476,7 +476,7 @@ def test_render_html_annotation_bg_data_attr():
         samples=[
             Sample(
                 id="t0",
-                tokens=[Token(id=1, token="tagged")],
+                tokens=[TokenOrSeqRef(id=1, token="tagged")],
                 annotations=[{"name": "my_annotation", "ranges": [(0, 1)]}],
             )
         ],
@@ -492,7 +492,7 @@ def test_render_html_multiple_annotations_listed():
         samples=[
             Sample(
                 id="p0",
-                tokens=[Token(id=1, token="both")],
+                tokens=[TokenOrSeqRef(id=1, token="both")],
                 annotations=[
                     {"name": "user", "ranges": [(0, 1)]},
                     {"name": "some_annotation", "ranges": [(0, 1)]},
@@ -510,7 +510,7 @@ def test_render_html_multiple_annotations_listed():
 
 def test_render_html_extra_field_underline_single():
     """Token with one extra field gets a box-shadow underline."""
-    tok = Token(id=1, token="x")
+    tok = TokenOrSeqRef(id=1, token="x")
     _set_extra(tok, "logit_lens", {"layer_5": "."})
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="ext")),
@@ -523,7 +523,7 @@ def test_render_html_extra_field_underline_single():
 
 def test_render_html_extra_field_underline_two_fields():
     """Token with two extra fields gets stacked underlines."""
-    tok = Token(id=1, token="x")
+    tok = TokenOrSeqRef(id=1, token="x")
     _set_extra(tok, "logit_lens", {"layer_5": "."})
     _set_extra(tok, "probe", {"acc": 0.9})
     doc = InifDocument(
@@ -539,9 +539,9 @@ def test_render_html_extra_field_underline_two_fields():
 
 def test_render_html_extra_field_different_tokens():
     """Two tokens with different extra fields get different colors."""
-    tok_a = Token(id=1, token="a")
+    tok_a = TokenOrSeqRef(id=1, token="a")
     _set_extra(tok_a, "logit_lens", {})
-    tok_b = Token(id=2, token="b")
+    tok_b = TokenOrSeqRef(id=2, token="b")
     _set_extra(tok_b, "probe", {})
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="ext")),
@@ -554,7 +554,7 @@ def test_render_html_extra_field_different_tokens():
 
 def test_render_html_extras_legend_in_control_panel():
     """Extra fields legend appears inside the control panel."""
-    tok = Token(id=1, token="x")
+    tok = TokenOrSeqRef(id=1, token="x")
     _set_extra(tok, "logit_lens", {})
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="ext")),
@@ -577,7 +577,7 @@ def test_render_html_no_extras_legend_plain_token():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="plain")),
         samples=[
-            Sample(id="p0", tokens=[Token(id=1, token="hi")]),
+            Sample(id="p0", tokens=[TokenOrSeqRef(id=1, token="hi")]),
         ],
     )
     html = render_html(doc)
@@ -591,7 +591,7 @@ def test_render_html_annotations_not_underlined():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=1, token="x")],
+                tokens=[TokenOrSeqRef(id=1, token="x")],
                 annotations=[{"name": "user", "ranges": [(0, 1)]}],
             )
         ],
@@ -603,7 +603,7 @@ def test_render_html_annotations_not_underlined():
 
 def test_render_html_extra_padding_multiple():
     """Multiple extra fields add padding-bottom for stacked lines."""
-    tok = Token(id=1, token="x")
+    tok = TokenOrSeqRef(id=1, token="x")
     _set_extra(tok, "field_a", 1)
     _set_extra(tok, "field_b", 2)
     doc = InifDocument(
@@ -647,9 +647,9 @@ def test_render_html_seq_ref_expanded_into_individual_tokens():
                 id="s0",
                 n_tokens=3,
                 tokens=[
-                    Token(id=1, token="Hello"),
-                    Token(id=2, token=" world"),
-                    Token(id=3, token="!"),
+                    TokenOrSeqRef(id=1, token="Hello"),
+                    TokenOrSeqRef(id=2, token=" world"),
+                    TokenOrSeqRef(id=3, token="!"),
                 ],
             ),
         ],
@@ -657,8 +657,8 @@ def test_render_html_seq_ref_expanded_into_individual_tokens():
             Sample(
                 id="x0",
                 tokens=[
-                    Token(id=-1, sequence_id="s0"),
-                    Token(id=1, token=" end"),
+                    TokenOrSeqRef(id=None, token="s0"),
+                    TokenOrSeqRef(id=1, token=" end"),
                 ],
             ),
         ],
@@ -680,13 +680,16 @@ def test_render_html_seq_ref_expanded_uses_real_token_ids():
             Sequence(
                 id="s0",
                 n_tokens=2,
-                tokens=[Token(id=11, token="a"), Token(id=12, token="b")],
+                tokens=[
+                    TokenOrSeqRef(id=11, token="a"),
+                    TokenOrSeqRef(id=12, token="b"),
+                ],
             ),
         ],
         samples=[
             Sample(
                 id="x0",
-                tokens=[Token(id=-1, sequence_id="s0")],
+                tokens=[TokenOrSeqRef(id=None, token="s0")],
             ),
         ],
     )
@@ -707,13 +710,13 @@ def test_render_html_seq_ref_wraps_like_normal_tokens():
             Sequence(
                 id="s0",
                 n_tokens=2,
-                tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+                tokens=[TokenOrSeqRef(id=1, token="a"), TokenOrSeqRef(id=2, token="b")],
             ),
         ],
         samples=[
             Sample(
                 id="w0",
-                tokens=[Token(id=-1, sequence_id="s0")],
+                tokens=[TokenOrSeqRef(id=None, token="s0")],
             ),
         ],
     )
@@ -730,7 +733,7 @@ def test_render_html_seq_ref_fallback_missing_seq():
         samples=[
             Sample(
                 id="m0",
-                tokens=[Token(id=-1, sequence_id="nonexistent")],
+                tokens=[TokenOrSeqRef(id=None, token="nonexistent")],
             ),
         ],
     )
@@ -747,15 +750,15 @@ def test_render_html_seq_ref_shares_position():
             Sequence(
                 id="s0",
                 n_tokens=2,
-                tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+                tokens=[TokenOrSeqRef(id=1, token="a"), TokenOrSeqRef(id=2, token="b")],
             ),
         ],
         samples=[
             Sample(
                 id="p0",
                 tokens=[
-                    Token(id=1, token="before"),
-                    Token(id=-1, sequence_id="s0"),
+                    TokenOrSeqRef(id=1, token="before"),
+                    TokenOrSeqRef(id=None, token="s0"),
                 ],
             ),
         ],
@@ -777,9 +780,9 @@ def test_render_html_newline_shown_as_symbol():
             Sample(
                 id="n0",
                 tokens=[
-                    Token(id=1, token="hello"),
-                    Token(id=2, token="\n"),
-                    Token(id=3, token="world"),
+                    TokenOrSeqRef(id=1, token="hello"),
+                    TokenOrSeqRef(id=2, token="\n"),
+                    TokenOrSeqRef(id=3, token="world"),
                 ],
             ),
         ],
@@ -796,9 +799,9 @@ def test_render_html_newline_inserts_line_break():
             Sample(
                 id="n1",
                 tokens=[
-                    Token(id=1, token="line1"),
-                    Token(id=2, token="\n"),
-                    Token(id=3, token="line2"),
+                    TokenOrSeqRef(id=1, token="line1"),
+                    TokenOrSeqRef(id=2, token="\n"),
+                    TokenOrSeqRef(id=3, token="line2"),
                 ],
             ),
         ],
@@ -821,15 +824,15 @@ def test_render_html_newline_in_seq_ref_inserts_line_break():
                 id="s0",
                 n_tokens=2,
                 tokens=[
-                    Token(id=1, token="first\n"),
-                    Token(id=2, token="second"),
+                    TokenOrSeqRef(id=1, token="first\n"),
+                    TokenOrSeqRef(id=2, token="second"),
                 ],
             ),
         ],
         samples=[
             Sample(
                 id="n2",
-                tokens=[Token(id=-1, sequence_id="s0")],
+                tokens=[TokenOrSeqRef(id=None, token="s0")],
             ),
         ],
     )
@@ -850,8 +853,8 @@ def test_render_html_no_line_break_without_newline():
             Sample(
                 id="n3",
                 tokens=[
-                    Token(id=1, token="hello"),
-                    Token(id=2, token=" world"),
+                    TokenOrSeqRef(id=1, token="hello"),
+                    TokenOrSeqRef(id=2, token=" world"),
                 ],
             ),
         ],

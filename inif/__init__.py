@@ -1,15 +1,15 @@
 from inif.flat import FlatTokenStore
-from inif.indexed import (
-    IndexedInifWriter,
-    iter_indexed_samples,
-    load_indexed,
-    read_indexed_header,
-    read_indexed_sample,
-    read_indexed_sample_summaries,
-    read_indexed_samples,
-    save_indexed,
+from inif.indexed import IndexedInifWriter
+from inif.io import (
+    DocumentInfo,
+    from_dict,
+    iter_samples,
+    load,
+    read_info,
+    read_samples,
+    save,
+    to_dict,
 )
-from inif.io import from_dict, load, save, to_dict
 from inif.models import (
     InifDocument,
     Metadata,
@@ -19,9 +19,10 @@ from inif.models import (
     Sequence,
     SourceEval,
     Span,
-    Token,
+    Text,
     TokenAnnotation,
     TokenExtras,
+    TokenOrSeqRef,
 )
 from inif.schema import get_schema, validate, write_schema
 from inif.selectors import (
@@ -64,22 +65,20 @@ __all__ = [
     "Sequence",
     "SourceEval",
     "Span",
-    "Token",
+    "Text",
     "TokenAnnotation",
     "TokenExtras",
+    "TokenOrSeqRef",
     "FlatTokenStore",
     # IO
+    "DocumentInfo",
     "from_dict",
     "IndexedInifWriter",
-    "iter_indexed_samples",
+    "iter_samples",
     "load",
-    "load_indexed",
-    "read_indexed_header",
-    "read_indexed_sample",
-    "read_indexed_sample_summaries",
-    "read_indexed_samples",
+    "read_info",
+    "read_samples",
     "save",
-    "save_indexed",
     "to_dict",
     # Schema
     "get_schema",

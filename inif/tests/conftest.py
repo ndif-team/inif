@@ -9,7 +9,8 @@ from inif.models import (
     Sequence,
     SourceEval,
     Span,
-    Token,
+    Text,
+    TokenOrSeqRef,
 )
 
 
@@ -50,22 +51,22 @@ def sequences():
             id="seq_0",
             n_tokens=3,
             tokens=[
-                Token(id=50256, token="<|endoftext|>"),
-                Token(id=1212, token="This"),
-                Token(id=318, token=" is"),
+                TokenOrSeqRef(id=50256, token="<|endoftext|>"),
+                TokenOrSeqRef(id=1212, token="This"),
+                TokenOrSeqRef(id=318, token=" is"),
             ],
         ),
         Sequence(
             id="seq_1",
             n_tokens=1,
-            tokens=[Token(id=50256, token="<|endoftext|>")],
+            tokens=[TokenOrSeqRef(id=50256, token="<|endoftext|>")],
         ),
     ]
 
 
 @pytest.fixture
 def sample_tokens():
-    tok_data = Token(
+    tok_data = TokenOrSeqRef(
         id=764,
         token=".",
         logprob=-0.5,
@@ -73,11 +74,11 @@ def sample_tokens():
     )
 
     return [
-        Token(id=-1, sequence_id="seq_0"),  # ref to seq 0
-        Token(id=257, token=" a"),
-        Token(id=1332, token=" test"),
+        TokenOrSeqRef(id=None, token="seq_0"),  # ref to seq 0
+        TokenOrSeqRef(id=257, token=" a"),
+        TokenOrSeqRef(id=1332, token=" test"),
         tok_data,
-        Token(id=-1, sequence_id="seq_1"),  # ref to seq 1
+        TokenOrSeqRef(id=None, token="seq_1"),  # ref to seq 1
     ]
 
 
@@ -86,7 +87,10 @@ def sample(sample_tokens):
     return Sample(
         id="sample_0",
         tokens=sample_tokens,
-        texts=["System prompt", " a test."],
+        texts=[
+            Text(name="system_0", value="System prompt"),
+            Text(name="user_0", value=" a test."),
+        ],
         annotations=[
             # index in sample.tokens list
             {"name": "content", "ranges": [(2, 3)]},
@@ -110,14 +114,14 @@ def sample_flat():
     return Sample(
         id="flat_0",
         tokens=[
-            Token(id=50256, token="<|endoftext|>"),
-            Token(id=1212, token="This"),
-            Token(id=318, token=" is"),
-            Token(id=257, token=" a"),
-            Token(id=1332, token=" test"),
-            Token(id=764, token="."),
+            TokenOrSeqRef(id=50256, token="<|endoftext|>"),
+            TokenOrSeqRef(id=1212, token="This"),
+            TokenOrSeqRef(id=318, token=" is"),
+            TokenOrSeqRef(id=257, token=" a"),
+            TokenOrSeqRef(id=1332, token=" test"),
+            TokenOrSeqRef(id=764, token="."),
         ],
-        texts=["This is a test."],
+        texts=[Text(name="text_0", value="This is a test.")],
     )
 
 
@@ -139,10 +143,10 @@ def doc_for_dedup():
             Sample(
                 id=f"s{i}",
                 tokens=[
-                    Token(id=50256, token="<|endoftext|>"),
-                    Token(id=1212, token="This"),
-                    Token(id=318, token=" is"),
-                    Token(id=257 + i, token=f" word{i}"),
+                    TokenOrSeqRef(id=50256, token="<|endoftext|>"),
+                    TokenOrSeqRef(id=1212, token="This"),
+                    TokenOrSeqRef(id=318, token=" is"),
+                    TokenOrSeqRef(id=257 + i, token=f" word{i}"),
                 ],
             )
             for i in range(3)

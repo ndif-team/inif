@@ -27,27 +27,27 @@ Research-oriented library. Follow nnterp conventions:
 
 ## Architecture
 
-- `models.py` — Core Pydantic models (InifDocument, Sample, Token, Sequence, etc.)
+- `models.py` — Core Pydantic models (InifDocument, Sample, TokenOrSeqRef, Sequence, Text, etc.)
 - `schema.py` — JSON schema dict + validation
-- `io.py` — save/load (.inif.json, .inif indexed archive)
-- `indexed.py` — single-file indexed `.inif` archive writer/readers
+- `io.py` — save/load (.inif.json, .inif indexed archive) plus the unified `iter_samples` / `read_samples` / `read_info` readers
+- `indexed.py` — single-file indexed `.inif` archive writer + internal readers (used by `io.py`)
 - `selectors.py` — Position selection by index/annotation/span/sequence_id/score
 - `tagging.py` — Regex-based auto-tagging, span creation
 - `sequences.py` — Sequence deduplication (lmout-style set-intersection) and expansion
 - `converters/inspect_ai.py` — Inspect AI EvalLog converter
 - `converters/evaleval.py` — every_eval_ever (EEE) instance-level → `InifDocument`
-- `converters/_tokenize.py` — shared `apply_chat_template` → `Token` helpers (used by both eval converters)
+- `converters/_tokenize.py` — shared `apply_chat_template` → `TokenOrSeqRef` helpers (used by both eval converters); also `name_messages` for role-named `Text` segments
 - `converters/text.py` — Raw text file / string processing
 - `cli.py` — CLI entry point (`inif convert txt`, `inif convert eval`, `inif convert evaleval`)
 
 ## Key Conventions
 
-- **Token.id**: `>= 0` = vocabulary token ID, `-1` = reference to a sequence. A `@model_validator` enforces the sentinel: vocab tokens require `token: str`, sequence-ref tokens require `sequence_id: str`.
-- **Token.sequence_id**: string ref to `Sequence.id` (only set on sequence ref tokens)
+- **`TokenOrSeqRef`**: a single Pydantic class for both vocab tokens and sequence references. Vocab tokens have `id: int >= 0` and `token: str` (the decoded piece). Sequence refs have `id is None` and use `token: str` to carry the target `Sequence.id` — there is no separate `sequence_id` field. `is_sequence_ref` is the property to check; the `sequence_id` *property* (read-only) returns `token` for refs and `None` for vocab tokens, kept as a convenience accessor for the common "is this a ref to seq X?" check.
 - **Token extras API**: Sparse per-token values such as logprob, logit_lens data, probes, etc. live in `model_extra` (pydantic `extra="allow"`). Use the dedicated helpers — they keep `__dict__` and `model_extra` in sync so the field both shows up under attribute access and serializes: `token.get_extra(key, default)`, `token.set_extra(key, value)`, `token.has_extra(key)`, `token.pop_extra(key)`, `token.extras` (snapshot dict).
 - **`TokenAnnotation`**: repeated labels live at `Sample.annotations` as `{name, ranges, metadata}`. Ranges are half-open token offsets (`[start, end)`) and are merged when metadata matches. Chat roles, generated output, reasoning traces, and regex labels are all annotations; roles are just auto-parsed annotation names from messages.
 - **`TokenExtras`**: documentation-only Pydantic model declaring the conventional token extras (`logprob`, `logit_lens`); embedded under `$defs.TokenExtras` in the JSON schema for external validators/UIs.
-- **Sequence**: stores both `tokens: list[str]` and `ids: list[int]` (parallel arrays). Required so dedup → expand round-trips preserve real vocabulary IDs even after a sample has been compressed and later materialized.
+- **`Text`**: each entry on `Sample.texts` is `{name, value, metadata}`. Default naming is role-based for chat (`"system_0"`, `"user_0"`, `"assistant_0"`, `"user_1"`, …) and index-based for plain text (`"text_0"`, …). System prompts are included.
+- **Sequence**: stores `tokens: list[TokenOrSeqRef]` (always real vocab tokens). Required so dedup → expand round-trips preserve real vocabulary IDs even after a sample has been compressed and later materialized.
 - **Sample.id**: always `str`. A `@field_validator(mode="before")` coerces ints (Inspect AI uses int sample ids by default).
 - **Sample.spans / Sample.annotations**: validated against `len(tokens)` at construction; out-of-range positions/ranges raise `ValidationError`.
 - **Sample first-class fields aligned with EEE**: `target` (singleton convenience), `references: list[str]` (full ground-truth list), `choices: list[str] | None` (MCQ options), `interaction_type: str | None` (`"single_turn"` / `"multi_turn"` / `"agentic"`), `error: str | None` (API timeouts, refusals, etc.), `sample_hash: str | None` (cross-model comparison key). These used to live under `Sample.metadata` for the evaleval converter; they are now top-level so filters / viewers / downstream tools can rely on them without key archaeology.
@@ -55,7 +55,7 @@ Research-oriented library. Follow nnterp conventions:
 - **InifDocument.total_samples**: computed property (`len(samples)`) — there is no stored field.
 - **InifDocument.subset(predicate)**: returns a new doc with only matching samples; sequences not referenced by the kept samples are pruned (self-contained sub-document).
 - **Sequence.id**: string identifier (e.g. `"sequence_0"`)
-- **Sample.texts**: plain strings (message contents or raw text)
+- **Sample.texts**: list of `Text` (`{name, value, metadata}`); see `Text` above.
 - **Metadata.created_at**: `datetime` (pydantic auto-parses ISO strings on load; `to_dict` uses `mode="json"` to emit ISO strings).
 - **Deduplication**: finds token sequences common to ALL samples via set-intersection of contiguous n-grams; replacement requires both the token strings AND ids to match.
 
@@ -84,4 +84,5 @@ Research-oriented library. Follow nnterp conventions:
 
 ## IO conventions
 
-- **`save(doc, path, compress=None)`** and **`load(path, compress=None)`** are symmetric. Suffix-based detection: `.inif` ⇒ indexed archive; `.inif.json` / `.json` ⇒ plain JSON. `.gz`, `.inifx`, and `compress=True/False` overrides are no longer supported.
+- **`save(doc, path)`** and **`load(path)`** are symmetric. Suffix-based detection: `.inif` ⇒ indexed archive; `.inif.json` / `.json` ⇒ plain JSON. `.gz`, `.inifx`, and `compress=True/False` overrides are no longer supported.
+- **Unified read API in `inif.io`**: `iter_samples(path)` (streams `Sample`s), `read_samples(path, sample_ids)` (single id or iterable; returns `list[Sample]` in requested order), `read_info(path)` (returns a `DocumentInfo` with `metadata` plus per-sample summary dicts; never inflates sequences). All three accept both `.inif` and `.inif.json` paths, dispatching to the indexed-archive readers or to a full `load` as appropriate. The format-specific helpers (`iter_indexed_samples`, `read_indexed_*`) are now internal — public callers should use the unified API.

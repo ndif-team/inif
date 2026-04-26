@@ -11,7 +11,7 @@ from inif._token_ops import (
     apply_regex_tags,
     compile_regex_tags,
 )
-from inif.models import InifDocument, Sample, Sequence, Span, Token
+from inif.models import InifDocument, Sample, Sequence, Span, TokenOrSeqRef
 
 
 class TextTagMode(str, Enum):
@@ -147,7 +147,7 @@ def tag_by_text_regex_all(
 
 
 def tag_by_predicate(
-    sample: Sample, predicate: Callable[[Token], bool], tag: str
+    sample: Sample, predicate: Callable[[TokenOrSeqRef], bool], tag: str
 ) -> None:
     """Tag every token for which ``predicate(token)`` returns ``True``.
 
@@ -307,8 +307,9 @@ def tag_chat_roles(
     positions_by_role: dict[str, list[int]] = {}
     for pos, tok in enumerate(sample.tokens):
         if tok.is_sequence_ref:
-            assert tok.sequence_id is not None
-            n = seq_map[tok.sequence_id].n_tokens
+            # Sequence-ref target id lives in ``tok.token`` after dropping
+            # the dedicated ``sequence_id`` field.
+            n = seq_map[tok.token].n_tokens
             ref_roles = set(roles[exp_idx : exp_idx + n])
             if len(ref_roles) == 1:
                 positions_by_role.setdefault(ref_roles.pop(), []).append(pos)

@@ -125,8 +125,10 @@ def test_messages_to_tokens_no_tokenizer():
     ]
     texts, tokens = _messages_to_tokens(msg_dicts)
     assert len(texts) == 2
-    assert texts[0] == "You are helpful."
-    assert texts[1] == "Hello!"
+    assert texts[0].name == "system_0"
+    assert texts[0].value == "You are helpful."
+    assert texts[1].name == "user_0"
+    assert texts[1].value == "Hello!"
     # Without tokenizer, no tokens generated
     assert len(tokens) == 0
 
@@ -144,7 +146,7 @@ def test_messages_to_tokens_fallback_encode():
     msg_dicts = [{"role": "user", "content": "hi"}]
     texts, tokens = _messages_to_tokens(msg_dicts, tokenizer=FallbackTokenizer())
     assert len(tokens) == 2  # "hi" = 2 chars = 2 tokens
-    assert texts == ["hi"]
+    assert [(t.name, t.value) for t in texts] == [("user_0", "hi")]
     # No role tagging in _messages_to_tokens anymore
     for t in tokens:
         assert "role" not in (t.model_extra or {})
@@ -179,7 +181,7 @@ def test_messages_to_tokens_with_chat_template():
     texts, tokens = _messages_to_tokens(msg_dicts, tokenizer=ChatTokenizer())
     # "<s>[user]hi[/user]" = 18 chars = 18 tokens
     assert len(tokens) == 18
-    assert texts == ["hi"]
+    assert [(t.name, t.value) for t in texts] == [("user_0", "hi")]
     # No role tagging in _messages_to_tokens anymore
     for t in tokens:
         assert "role" not in (t.model_extra or {})
@@ -206,8 +208,12 @@ def test_from_eval_log_basic():
     assert s.target == "4"
     assert len(s.scores) == 1
     assert s.scores[0].value == 1.0
-    # texts should be plain strings
-    assert s.texts == ["Answer:", "What is 2+2?", "4"]
+    # texts are role-named Text objects, system prompt included
+    assert [(t.name, t.value) for t in s.texts] == [
+        ("system_0", "Answer:"),
+        ("user_0", "What is 2+2?"),
+        ("assistant_0", "4"),
+    ]
 
 
 def test_from_eval_log_no_samples():
@@ -236,7 +242,8 @@ def test_from_eval_log_with_tokenizer():
     )
     assert len(doc.samples[0].tokens) == 2
     assert len(doc.samples[0].texts) == 1
-    assert doc.samples[0].texts[0] == "AB"
+    assert doc.samples[0].texts[0].name == "user_0"
+    assert doc.samples[0].texts[0].value == "AB"
 
 
 def test_from_eval_log_min_sequence_length_controls_dedup():

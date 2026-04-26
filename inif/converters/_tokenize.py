@@ -1,4 +1,4 @@
-"""Shared helpers for converting chat-style message dicts into INIF Tokens.
+"""Shared helpers for converting chat-style message dicts into INIF tokens.
 
 Used by multiple eval-format converters (Inspect AI, evaleval). The logic here
 is framework-agnostic: it consumes a list of ``{"role": ..., "content": ...}``
@@ -15,7 +15,25 @@ from inif.converters._decode import (
     decode_token_ids,
     offset_mapping_decode_text,
 )
-from inif.models import Sample, Token
+from inif.models import Sample, Text, TokenOrSeqRef
+
+
+def name_messages(messages: list[dict[str, str]]) -> list[Text]:
+    """Convert chat message dicts into role-named :class:`Text` segments.
+
+    Each message becomes one ``Text`` whose ``name`` is its role suffixed
+    with a per-role index (``"system_0"``, ``"user_0"``, ``"assistant_0"``,
+    ``"user_1"``, …) and whose ``value`` is the message content. The
+    system prompt, when present, is included.
+    """
+    counters: dict[str, int] = {}
+    out: list[Text] = []
+    for msg in messages:
+        role = msg.get("role") or "text"
+        idx = counters.get(role, 0)
+        counters[role] = idx + 1
+        out.append(Text(name=f"{role}_{idx}", value=msg.get("content", "")))
+    return out
 
 
 def offset_mapping_decode(
@@ -58,8 +76,8 @@ def messages_to_tokens(
     decode_cache: dict[int, str] | None = None,
     byte_decoder: "ByteSliceDecoder | None" = None,
     use_offset_mapping: bool = True,
-) -> tuple[list[str], list[Token]]:
-    """Convert message dicts to plain text strings and Tokens.
+) -> tuple[list[Text], list[TokenOrSeqRef]]:
+    """Convert message dicts to role-named :class:`Text` segments and Tokens.
 
     When the tokenizer supports ``apply_chat_template``, uses it to produce the
     full token sequence including template delimiters. Otherwise falls back to
@@ -93,8 +111,8 @@ def messages_to_tokens(
     Callers supply ``byte_decoder`` (shared across samples of one archive)
     and / or ``decode_cache`` (same) to amortize per-id work.
     """
-    texts = [msg["content"] for msg in messages]
-    tokens: list[Token] = []
+    texts = name_messages(messages)
+    tokens: list[TokenOrSeqRef] = []
 
     if tokenizer is None:
         return texts, tokens
@@ -105,7 +123,7 @@ def messages_to_tokens(
             if result is not None:
                 ids, pieces = result
                 for tid, piece in zip(ids, pieces):
-                    tokens.append(Token(id=tid, token=piece))
+                    tokens.append(TokenOrSeqRef(id=tid, token=piece))
                 return texts, tokens
 
         token_ids = tokenizer.apply_chat_template(
@@ -131,7 +149,7 @@ def messages_to_tokens(
                 "problematic characters before tokenizing."
             ) from e
         for tid, piece in zip(token_ids, pieces):
-            tokens.append(Token(id=tid, token=piece))
+            tokens.append(TokenOrSeqRef(id=tid, token=piece))
     else:
         for msg in messages:
             text = msg["content"]
@@ -139,13 +157,13 @@ def messages_to_tokens(
                 encoded = tokenizer.encode(text, add_special_tokens=False)
                 for tid in encoded:
                     token_str = tokenizer.decode([tid])
-                    tokens.append(Token(id=tid, token=token_str))
+                    tokens.append(TokenOrSeqRef(id=tid, token=token_str))
 
     return texts, tokens
 
 
 def find_message_token_range(
-    tokens: list[Token],
+    tokens: list[TokenOrSeqRef],
     msg_dicts: list[dict[str, str]],
     tokenizer: Any,
     role: str = "assistant",
