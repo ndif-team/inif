@@ -49,7 +49,9 @@ def test_convert_txt_basic():
 
         doc = load(out)
         assert len(doc.samples) == 1
-        assert doc.samples[0].texts == ["hello world test"]
+        assert [(t.name, t.value) for t in doc.samples[0].texts] == [
+            ("text_0", "hello world test")
+        ]
 
 
 def test_convert_txt_directory():

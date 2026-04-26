@@ -11,12 +11,14 @@ from inif.converters._decode import (
     has_byte_level_decoder,
     offset_mapping_decode_text,
 )
+from inif.converters._tokenize import name_messages
 from inif.models import (
     InifDocument,
     Metadata,
     ModelInfo,
     Sample,
-    Token,
+    Text,
+    TokenOrSeqRef,
 )
 from inif.sequences import deduplicate_sequences
 
@@ -139,9 +141,10 @@ def from_texts(
                     strict_roundtrip=True,
                 )
             tokens = [
-                Token(id=tid, token=piece) for tid, piece in zip(token_ids, pieces)
+                TokenOrSeqRef(id=tid, token=piece)
+                for tid, piece in zip(token_ids, pieces)
             ]
-            sample_texts = [msg["content"] for msg in item]
+            sample_texts = name_messages(item)
             chat_messages.append(item)
         else:
             ids, strings = _tokenize_text(
@@ -150,8 +153,10 @@ def from_texts(
                 decode_cache=decode_cache,
                 byte_decoder=byte_decoder,
             )
-            tokens = [Token(id=tid, token=tstr) for tid, tstr in zip(ids, strings)]
-            sample_texts = [item]
+            tokens = [
+                TokenOrSeqRef(id=tid, token=tstr) for tid, tstr in zip(ids, strings)
+            ]
+            sample_texts = [Text(name="text_0", value=item)]
             chat_messages.append(None)
         samples.append(Sample(id=sid, tokens=tokens, texts=sample_texts))
 

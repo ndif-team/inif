@@ -22,7 +22,8 @@ from inif.models import (
     SampleScore,
     Sequence,
     SourceEval,
-    Token,
+    Text,
+    TokenOrSeqRef,
 )
 from inif.sequences import deduplicate_sequences
 
@@ -278,8 +279,8 @@ def from_eval_log(
                 sample_id_raw = i
             sample_id = str(sample_id_raw)
 
-            texts: list[str] = []
-            sample_tokens: list[Token] = []
+            texts: list[Text] = []
+            sample_tokens: list[TokenOrSeqRef] = []
             target = None
 
             if hasattr(inspect_sample, "target") and inspect_sample.target:

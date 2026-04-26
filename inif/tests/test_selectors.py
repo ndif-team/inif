@@ -4,7 +4,7 @@ from inif.models import (
     ModelInfo,
     Sample,
     SampleScore,
-    Token,
+    TokenOrSeqRef,
 )
 from inif.selectors import (
     filter_samples_by_score,
@@ -47,7 +47,10 @@ def test_select_by_annotation_no_match(sample):
 def test_select_by_sequence_id(sample):
     sel = select_by_sequence_id(sample, "seq_0")
     assert len(sel.tokens) == 1
-    assert sel.tokens[0].id == -1  # ref token
+    # Sequence refs have ``id is None`` and carry the target id in ``token``.
+    assert sel.tokens[0].is_sequence_ref
+    assert sel.tokens[0].id is None
+    assert sel.tokens[0].token == "seq_0"
 
 
 def test_select_by_span(sample):
@@ -67,17 +70,17 @@ def test_filter_samples_by_score():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=1, token="a")],
+                tokens=[TokenOrSeqRef(id=1, token="a")],
                 scores=[SampleScore(scorer="acc", value=1.0)],
             ),
             Sample(
                 id="s1",
-                tokens=[Token(id=2, token="b")],
+                tokens=[TokenOrSeqRef(id=2, token="b")],
                 scores=[SampleScore(scorer="acc", value=0.0)],
             ),
             Sample(
                 id="s2",
-                tokens=[Token(id=3, token="c")],
+                tokens=[TokenOrSeqRef(id=3, token="c")],
                 scores=[SampleScore(scorer="f1", value=0.5)],
             ),
         ],

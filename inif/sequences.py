@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from inif.models import InifDocument, Sample, Sequence, Token
+from inif.models import InifDocument, Sample, Sequence, TokenOrSeqRef
 
 
 def _ngram_positions(tokens: list[str], n: int) -> dict[tuple[str, ...], list[int]]:
@@ -91,7 +91,7 @@ def _filter_maximal_sequences(seqs: list[list[str]]) -> list[list[str]]:
     return kept
 
 
-def _has_extra_fields(token: Token) -> bool:
+def _has_extra_fields(token: TokenOrSeqRef) -> bool:
     """Check if a token has extra fields (interpretability data attached)."""
     return bool(token.model_extra)
 
@@ -103,13 +103,15 @@ def _clean_pairs(sample: Sample) -> list[tuple[str, int]]:
     for annotation in sample.annotations:
         for start, end in annotation.ranges:
             annotated_positions.update(range(start, end))
-    return [
-        (t.token or "", t.id)
-        for i, t in enumerate(sample.tokens)
-        if i not in annotated_positions
-        and not t.is_sequence_ref
-        and not _has_extra_fields(t)
-    ]
+    pairs: list[tuple[str, int]] = []
+    for i, t in enumerate(sample.tokens):
+        if i in annotated_positions or t.is_sequence_ref or _has_extra_fields(t):
+            continue
+        # Vocab tokens always have an int id (guaranteed by ``is_sequence_ref``
+        # being False above); the assertion is for the type checker.
+        assert t.id is not None
+        pairs.append((t.token or "", t.id))
+    return pairs
 
 
 def _capture_ids_for_sequence(sample: Sample, seq_strs: list[str]) -> list[int] | None:
@@ -127,10 +129,10 @@ def _capture_ids_for_sequence(sample: Sample, seq_strs: list[str]) -> list[int] 
 
 
 def _replace_sequences_in_tokens(
-    tokens: list[Token],
+    tokens: list[TokenOrSeqRef],
     sequences: list[Sequence],
     blocked_positions: set[int] | None = None,
-) -> tuple[list[Token], list[tuple[int, int]]]:
+) -> tuple[list[TokenOrSeqRef], list[tuple[int, int]]]:
     """Greedy longest-match replacement of token sequences with refs.
 
     A window is only replaced when both the token strings AND ids match the
@@ -150,19 +152,20 @@ def _replace_sequences_in_tokens(
     sorted_seqs = sorted(sequences, key=lambda s: s.n_tokens, reverse=True)
 
     # Pre-extract per-sequence parallel token-string and id arrays for fast
-    # comparison (avoids attribute lookups in the hot loop).
-    seq_info: list[tuple[Sequence, list[str | None], list[int], int]] = [
+    # comparison (avoids attribute lookups in the hot loop). Sequence tokens
+    # are always vocab tokens (id is int), so the id arrays carry no None.
+    seq_info: list[tuple[Sequence, list[str], list[int | None], int]] = [
         (s, [t.token for t in s.tokens], [t.id for t in s.tokens], s.n_tokens)
         for s in sorted_seqs
     ]
 
     # Index by (first_token, first_id) so we only enter the match loop when
     # the current position could possibly start one of our sequences.
-    first_index: dict[tuple[str | None, int], list[int]] = {}
+    first_index: dict[tuple[str, int | None], list[int]] = {}
     for idx, (_, toks, ids, _) in enumerate(seq_info):
         first_index.setdefault((toks[0], ids[0]), []).append(idx)
 
-    new_tokens: list[Token] = []
+    new_tokens: list[TokenOrSeqRef] = []
     old_to_new: list[tuple[int, int]] = []
     n = len(tokens)
     i = 0
@@ -205,7 +208,7 @@ def _replace_sequences_in_tokens(
                     break
             if ok:
                 new_pos = len(new_tokens)
-                new_tokens.append(Token(id=-1, sequence_id=seq.id))
+                new_tokens.append(TokenOrSeqRef(id=None, token=seq.id))
                 for _ in range(seq_len):
                     old_to_new.append((new_pos, new_pos + 1))
                 i += seq_len
@@ -289,7 +292,8 @@ def deduplicate_sequences(
                 id=seq_id,
                 n_tokens=len(seq_tokens),
                 tokens=[
-                    Token(id=tid, token=tstr) for tid, tstr in zip(seq_ids, seq_tokens)
+                    TokenOrSeqRef(id=tid, token=tstr)
+                    for tid, tstr in zip(seq_ids, seq_tokens)
                 ],
             )
         )
@@ -316,15 +320,15 @@ def expand_sequences(doc: InifDocument) -> InifDocument:
 
     Returns a new document whose tokens are independent from ``doc``. The
     returned document drops the sequence list and emits each materialised
-    token as a plain vocab token (no ``sequence_id`` provenance) — running
-    ``deduplicate_sequences`` again will rediscover the same shared runs.
+    token as a plain vocab token — running ``deduplicate_sequences`` again
+    will rediscover the same shared runs.
     """
     doc = doc.model_copy(deep=True)
     seq_map = doc.sequence_map
 
     new_samples: list[Sample] = []
     for sample in doc.samples:
-        new_tokens: list[Token] = []
+        new_tokens: list[TokenOrSeqRef] = []
         old_to_new: list[tuple[int, int]] = []
         for token in sample.tokens:
             new_start = len(new_tokens)
@@ -332,15 +336,10 @@ def expand_sequences(doc: InifDocument) -> InifDocument:
                 new_tokens.append(token)
                 old_to_new.append((new_start, len(new_tokens)))
                 continue
-            assert token.sequence_id is not None, (
-                "Sequence ref token must have sequence_id"
-            )
-            assert token.sequence_id in seq_map, (
-                f"Sequence '{token.sequence_id}' not found"
-            )
-            seq = seq_map[token.sequence_id]
+            assert token.token in seq_map, f"Sequence '{token.token}' not found"
+            seq = seq_map[token.token]
             for t in seq.tokens:
-                new_tokens.append(Token(id=t.id, token=t.token))
+                new_tokens.append(TokenOrSeqRef(id=t.id, token=t.token))
             old_to_new.append((new_start, len(new_tokens)))
         new_sample = sample.model_copy(update={"tokens": new_tokens}, deep=True)
         _remap_sample_annotations(new_sample, old_to_new)

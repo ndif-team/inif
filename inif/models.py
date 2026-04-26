@@ -4,7 +4,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class Text(BaseModel):
+    """A named text segment on a :class:`Sample`.
+
+    A sample's ``texts`` list carries one entry per source segment — for
+    chat inputs that's one per message (including the system prompt); for
+    plain-text inputs it's one per input string. The default naming scheme
+    is role-based for chat (``"system_0"``, ``"user_0"``, ``"assistant_0"``,
+    ``"user_1"``, …) and index-based for plain text (``"text_0"``,
+    ``"text_1"``, …).
+
+    ``metadata`` is a free-form dict for caller-supplied context (e.g.
+    turn index, tool-call payload).
+    """
+
+    name: str
+    value: str
+    metadata: dict = Field(default_factory=dict)
 
 
 class ModelInfo(BaseModel):
@@ -36,36 +55,54 @@ class Metadata(BaseModel):
     extra: dict = Field(default_factory=dict)
 
 
-class Token(BaseModel):
+class TokenOrSeqRef(BaseModel):
+    """A token entry — either a vocabulary token or a reference to a Sequence.
+
+    A vocabulary token has an integer ``id`` (the model's vocab id) and a
+    ``token`` string (the decoded piece). A sequence reference has
+    ``id is None`` and uses the ``token`` field to carry the target
+    :class:`Sequence` id (a string). The presence / absence of ``id`` is
+    the discriminator — there is no separate ``sequence_id`` field.
+
+    Tokens accept arbitrary extra fields via ``model_config["extra"] =
+    "allow"``. Use the :meth:`set_extra` / :meth:`get_extra` helpers (not
+    direct attribute assignment) so values stay in sync between
+    ``__dict__`` and ``model_extra``.
+    """
+
     model_config = {"extra": "allow", "arbitrary_types_allowed": True}
 
-    # Declaration order drives serialization order: ``token`` / ``seq_id``
-    # first, ``id`` last — so a rendered token dict reads left-to-right as
-    # ``{"token": "...", "id": N}`` or ``{"seq_id": "...", "id": -1}``.
-    token: str | None = None
-    sequence_id: str | None = Field(
-        default=None,
-        serialization_alias="seq_id",
-        validation_alias=AliasChoices("seq_id", "sequence_id"),
-    )
-    id: int
+    # Declaration order drives serialization order: ``token`` first, ``id``
+    # last — so a rendered dict reads left-to-right as
+    # ``{"token": "...", "id": N}`` for vocab tokens and
+    # ``{"token": "seq_0"}`` (id elided as default) for sequence refs.
+    token: str
+    id: int | None = None
 
     @model_validator(mode="after")
-    def _validate_token(self) -> Token:
-        if self.is_sequence_ref:
-            assert self.sequence_id is not None, (
-                "Sequence ref tokens (id < 0) must have sequence_id"
-            )
-        else:
-            assert self.token is not None, (
-                f"Vocabulary tokens (id >= 0) must have a token string, "
-                f"got id={self.id}"
-            )
+    def _validate_token(self) -> TokenOrSeqRef:
+        # ``token`` is always required: a vocabulary token uses it as the
+        # decoded string; a sequence ref uses it as the target Sequence id.
+        assert self.token is not None and self.token != "" or self.id is not None, (
+            "TokenOrSeqRef requires a non-empty `token` string "
+            "(decoded piece for vocab tokens, sequence id for refs)"
+        )
         return self
 
     @property
     def is_sequence_ref(self) -> bool:
-        return self.id < 0
+        return self.id is None
+
+    @property
+    def sequence_id(self) -> str | None:
+        """Convenience accessor returning the target Sequence id for refs.
+
+        Returns the value of ``self.token`` when this is a sequence ref
+        (``id is None``); ``None`` for vocabulary tokens. Provided so the
+        ``"is this a ref to seq X?"`` check reads naturally without
+        callers having to remember the ``id is None`` invariant.
+        """
+        return self.token if self.is_sequence_ref else None
 
     # ------------------------------------------------------------------
     # Extras API
@@ -115,20 +152,25 @@ class Token(BaseModel):
     # Sequence expansion
     # ------------------------------------------------------------------
 
-    def expanded_tokens(self, sequences: list[Sequence]) -> list[Token]:
+    def expanded_tokens(self, sequences: list[Sequence]) -> list[TokenOrSeqRef]:
+        """Materialize this entry into vocab tokens (no-op for vocab tokens).
+
+        For a sequence ref, ``self.token`` names the target sequence; the
+        method looks it up in ``sequences`` and returns fresh vocab tokens
+        with the original ids preserved.
+        """
         if not self.is_sequence_ref:
             return [self]
-        assert self.sequence_id is not None, "Sequence ref token must have sequence_id"
         seq_map = {s.id: s for s in sequences}
-        assert self.sequence_id in seq_map, f"Sequence '{self.sequence_id}' not found"
-        seq = seq_map[self.sequence_id]
-        return [Token(id=t.id, token=t.token) for t in seq.tokens]
+        assert self.token in seq_map, f"Sequence '{self.token}' not found"
+        seq = seq_map[self.token]
+        return [TokenOrSeqRef(id=t.id, token=t.token) for t in seq.tokens]
 
 
 class Sequence(BaseModel):
     id: str
     n_tokens: int
-    tokens: list[Token]
+    tokens: list[TokenOrSeqRef]
     text: str | None = None
 
     @model_validator(mode="after")
@@ -171,8 +213,8 @@ class SampleScore(BaseModel):
 
 class Sample(BaseModel):
     id: str
-    tokens: list[Token] = Field(default_factory=list)
-    texts: list[str] = Field(default_factory=list)
+    tokens: list[TokenOrSeqRef] = Field(default_factory=list)
+    texts: list[Text] = Field(default_factory=list)
     annotations: list[TokenAnnotation] = Field(default_factory=list)
     spans: list[Span] = Field(default_factory=list)
     scores: list[SampleScore] = Field(default_factory=list)
@@ -258,7 +300,9 @@ class Sample(BaseModel):
     def remove_annotation(self, name: str) -> None:
         self.annotations = [ann for ann in self.annotations if ann.name != name]
 
-    def _replace_token_with_tokens(self, index: int, replacement: list[Token]) -> None:
+    def _replace_token_with_tokens(
+        self, index: int, replacement: list[TokenOrSeqRef]
+    ) -> None:
         assert 0 <= index < len(self.tokens), f"Token index {index} out of range"
         assert replacement, "Replacement must contain at least one token"
         delta = len(replacement) - 1
@@ -276,28 +320,23 @@ class Sample(BaseModel):
                     adjusted.append((start, end + delta))
             annotation.ranges = _merge_ranges(adjusted)
 
-    def get_expanded_tokens(self, sequences: list[Sequence]) -> list[Token]:
+    def get_expanded_tokens(self, sequences: list[Sequence]) -> list[TokenOrSeqRef]:
         # Build the sequence map once per call instead of rebuilding it inside
-        # ``Token.expanded_tokens`` for every token (which would make this
-        # O(n_tokens × n_sequences)).
+        # ``TokenOrSeqRef.expanded_tokens`` for every token (which would make
+        # this O(n_tokens × n_sequences)).
         seq_map = {s.id: s for s in sequences}
-        result: list[Token] = []
+        result: list[TokenOrSeqRef] = []
         for token in self.tokens:
             if not token.is_sequence_ref:
                 result.append(token)
                 continue
-            assert token.sequence_id is not None, (
-                "Sequence ref token must have sequence_id"
-            )
-            assert token.sequence_id in seq_map, (
-                f"Sequence '{token.sequence_id}' not found"
-            )
-            seq = seq_map[token.sequence_id]
+            assert token.token in seq_map, f"Sequence '{token.token}' not found"
+            seq = seq_map[token.token]
             for t in seq.tokens:
-                result.append(Token(id=t.id, token=t.token))
+                result.append(TokenOrSeqRef(id=t.id, token=t.token))
         return result
 
-    def get_tokens_by_positions(self, positions: list[int]) -> list[Token]:
+    def get_tokens_by_positions(self, positions: list[int]) -> list[TokenOrSeqRef]:
         pos_set = set(positions)
         return [t for i, t in enumerate(self.tokens) if i in pos_set]
 
@@ -305,8 +344,8 @@ class Sample(BaseModel):
         self,
         expanded_position: int,
         sequences: list[Sequence],
-    ) -> tuple[int, Token]:
-        """Ensure ``expanded_position`` is a real Token in ``self.tokens``.
+    ) -> tuple[int, TokenOrSeqRef]:
+        """Ensure ``expanded_position`` is a real vocab token in ``self.tokens``.
 
         If the position falls inside a sequence ref, the entire ref is
         expanded in place into its constituent tokens (with their original
@@ -322,17 +361,14 @@ class Sample(BaseModel):
         current = 0
         for i, tok in enumerate(self.tokens):
             if tok.is_sequence_ref:
-                assert tok.sequence_id is not None, (
-                    "Sequence ref token must have sequence_id"
-                )
-                assert tok.sequence_id in seq_map, (
-                    f"Sequence '{tok.sequence_id}' not found"
-                )
-                seq = seq_map[tok.sequence_id]
+                assert tok.token in seq_map, f"Sequence '{tok.token}' not found"
+                seq = seq_map[tok.token]
                 n = seq.n_tokens
                 if current <= expanded_position < current + n:
                     offset = expanded_position - current
-                    expanded = [Token(id=t.id, token=t.token) for t in seq.tokens]
+                    expanded = [
+                        TokenOrSeqRef(id=t.id, token=t.token) for t in seq.tokens
+                    ]
                     self._replace_token_with_tokens(i, expanded)
                     return i + offset, self.tokens[i + offset]
                 current += n
@@ -404,8 +440,8 @@ class InifDocument(BaseModel):
         referenced: set[str] = set()
         for sample in kept_samples:
             for tok in sample.tokens:
-                if tok.is_sequence_ref and tok.sequence_id is not None:
-                    referenced.add(tok.sequence_id)
+                if tok.is_sequence_ref:
+                    referenced.add(tok.token)
         kept_sequences = [
             s.model_copy(deep=True) for s in self.sequences if s.id in referenced
         ]

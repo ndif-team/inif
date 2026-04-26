@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from pydantic import BaseModel, Field, model_validator
 
 from inif._token_ops import CompiledRegexTag, compile_regex_tags
-from inif.models import InifDocument, Metadata, ModelInfo, Sample, Token
+from inif.models import InifDocument, Metadata, ModelInfo, Sample, TokenOrSeqRef
 
 RegexAnnotation = tuple[str | re.Pattern[str], str]
 
@@ -23,7 +23,7 @@ class FlatTokenStore(BaseModel):
 
     sample_ids: list[str]
     sample_offsets: list[int]
-    token_ids: list[int]
+    token_ids: list[int | None]
     token_texts: list[str | None]
     sequence_ids: list[str | None] = Field(default_factory=list)
     annotations: dict[str, list[int]] = Field(default_factory=dict)
@@ -68,12 +68,16 @@ class FlatTokenStore(BaseModel):
         With ``expand_sequences=True`` (default), sequence refs are expanded
         into their constituent vocab tokens. The sample-flat ``sequence_ids``
         array still records which shared run each materialised position came
-        from, even though the expanded ``Token`` objects themselves no longer
-        carry ``sequence_id``.
+        from, even though the expanded :class:`TokenOrSeqRef` objects
+        themselves don't carry that provenance.
+
+        With ``expand_sequences=False``, ref positions land as
+        ``token_ids[i] is None`` and ``token_texts[i]`` carries the target
+        :class:`Sequence` id (mirroring how refs are stored on disk).
         """
         sample_ids: list[str] = []
         sample_offsets: list[int] = [0]
-        token_ids: list[int] = []
+        token_ids: list[int | None] = []
         token_texts: list[str | None] = []
         sequence_ids: list[str | None] = []
         annotations: dict[str, list[int]] = {}
@@ -87,7 +91,9 @@ class FlatTokenStore(BaseModel):
                     expanded = token.expanded_tokens(doc.sequences)
                 else:
                     expanded = [token]
-                provenance = token.sequence_id
+                # For refs, ``token.token`` carries the target Sequence id;
+                # remember that as provenance regardless of whether we expand.
+                provenance = token.token if token.is_sequence_ref else None
                 for expanded_token in expanded:
                     token_ids.append(expanded_token.id)
                     token_texts.append(expanded_token.token)
@@ -197,7 +203,9 @@ class FlatTokenStore(BaseModel):
     def positions(self, annotation_name: str) -> list[int]:
         return list(self.annotations.get(annotation_name, []))
 
-    def tokens(self, annotation_name: str) -> list[tuple[int, int, str | None]]:
+    def tokens(
+        self, annotation_name: str
+    ) -> list[tuple[int, int | None, str | None]]:
         return [
             (pos, self.token_ids[pos], self.token_texts[pos])
             for pos in self.annotations.get(annotation_name, [])
@@ -209,9 +217,11 @@ class FlatTokenStore(BaseModel):
     def to_document(self, metadata: Metadata | None = None) -> InifDocument:
         """Materialize a flat analysis document.
 
-        The result keeps sample ids, token ids/text, sequence provenance, and
-        sparse annotations. It intentionally emits flat samples and does not
-        recreate shared ``Sequence`` objects.
+        The result keeps sample ids, token ids/text, and sparse annotations.
+        Sequence-ref provenance lives only on the flat store; the emitted
+        :class:`TokenOrSeqRef` objects are plain vocab tokens (or refs when
+        ``token_ids[pos] is None``). It intentionally does not recreate
+        shared :class:`Sequence` objects.
         """
         samples: list[Sample] = []
         for sample_id, start, end in zip(
@@ -219,12 +229,11 @@ class FlatTokenStore(BaseModel):
             self.sample_offsets,
             self.sample_offsets[1:],
         ):
-            tokens: list[Token] = []
+            tokens: list[TokenOrSeqRef] = []
             for pos in range(start, end):
-                token = Token(
+                token = TokenOrSeqRef(
                     id=self.token_ids[pos],
-                    token=self.token_texts[pos],
-                    sequence_id=self.sequence_ids[pos],
+                    token=self.token_texts[pos] or "",
                 )
                 tokens.append(token)
             sample = Sample(id=sample_id, tokens=tokens)

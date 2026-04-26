@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from inif.models import InifDocument, Sample, Token
+from inif.models import InifDocument, Sample, TokenOrSeqRef
 
 
 @dataclass
 class TokenSelection:
     sample_id: str | int
-    tokens: list[Token] = field(default_factory=list)
+    tokens: list[TokenOrSeqRef] = field(default_factory=list)
     positions: list[int] = field(default_factory=list)
 
 
@@ -42,10 +42,16 @@ def select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection
 
 
 def select_by_sequence_id(sample: Sample, seq_id: str) -> TokenSelection:
+    """Select sequence-ref tokens that point at the given sequence id.
+
+    A sequence ref is identified by ``id is None`` and carries the target
+    :class:`Sequence` id in its ``token`` field. Useful for finding *where*
+    a shared run is referenced in a sample without expanding it.
+    """
     tokens = []
     positions = []
     for i, t in enumerate(sample.tokens):
-        if t.sequence_id == seq_id:
+        if t.is_sequence_ref and t.token == seq_id:
             tokens.append(t)
             positions.append(i)
     return TokenSelection(

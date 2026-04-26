@@ -46,24 +46,15 @@ def _score_summary(score: SampleScore) -> dict[str, Any]:
     return summary
 
 
-def _preview_text(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars]
-
-
 def _sample_summary(sample: Sample, max_preview_chars: int) -> dict[str, Any]:
-    text_preview = "\n".join(sample.texts)
+    text_preview = "\n".join(t.value for t in sample.texts)
     summary: dict[str, Any] = {
         "id": sample.id,
         "n_tokens": len(sample.tokens),
         "n_texts": len(sample.texts),
         "n_spans": len(sample.spans),
         "scores": [_score_summary(score) for score in sample.scores],
-        "text_preview": _preview_text(text_preview, max_preview_chars),
-        "texts_preview": [
-            _preview_text(text, max_preview_chars) for text in sample.texts
-        ],
+        "text_preview": text_preview[:max_preview_chars],
     }
     if sample.target is not None:
         summary["target"] = sample.target
@@ -113,8 +104,8 @@ def _referenced_sequence_ids(samples: Iterable[Sample]) -> set[str]:
     referenced: set[str] = set()
     for sample in samples:
         for token in sample.tokens:
-            if token.is_sequence_ref and token.sequence_id is not None:
-                referenced.add(token.sequence_id)
+            if token.is_sequence_ref:
+                referenced.add(token.token)
     return referenced
 
 

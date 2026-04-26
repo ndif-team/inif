@@ -1,7 +1,7 @@
 import re
 
 from inif.flat import FlatTokenStore
-from inif.models import InifDocument, Metadata, ModelInfo, Sample, Token
+from inif.models import InifDocument, Metadata, ModelInfo, Sample, TokenOrSeqRef
 
 
 def test_flat_store_from_document_expands_sequences(doc):
@@ -55,8 +55,11 @@ def test_flat_store_sample_position_and_iteration():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="test")),
         samples=[
-            Sample(id="s0", tokens=[Token(id=1, token="a"), Token(id=2, token="b")]),
-            Sample(id="s1", tokens=[Token(id=3, token="c")]),
+            Sample(
+                id="s0",
+                tokens=[TokenOrSeqRef(id=1, token="a"), TokenOrSeqRef(id=2, token="b")],
+            ),
+            Sample(id="s1", tokens=[TokenOrSeqRef(id=3, token="c")]),
         ],
     )
     store = FlatTokenStore.from_document(doc)
@@ -80,6 +83,8 @@ def test_flat_store_to_document_preserves_flat_tokens_and_annotations(doc):
     sample = materialized.samples[0]
     assert sample.id == "sample_0"
     assert [token.id for token in sample.tokens] == store.token_ids
-    assert [token.sequence_id for token in sample.tokens] == store.sequence_ids
+    # Sequence-ref provenance lives only on the flat store; materialized
+    # tokens are vocab tokens, so ``sequence_id`` is None for every entry.
+    assert all(token.sequence_id is None for token in sample.tokens)
     assert sample.annotation_positions("word") == [1]
     assert sample.annotation_positions("content") == [4]

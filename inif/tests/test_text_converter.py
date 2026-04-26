@@ -40,7 +40,9 @@ def test_from_texts_basic():
     assert len(doc.samples) == 2
     assert doc.samples[0].id == "sample_0"
     assert doc.samples[1].id == "sample_1"
-    assert doc.samples[0].texts == ["hello world"]
+    assert [(t.name, t.value) for t in doc.samples[0].texts] == [
+        ("text_0", "hello world")
+    ]
     assert len(doc.samples[0].tokens) == 2
     assert doc.samples[0].tokens[0].token == "hello"
     assert doc.samples[0].tokens[1].token == "world"
@@ -174,9 +176,9 @@ def test_from_texts_with_messages():
     )
 
     assert len(doc.samples) == 2
-    # texts should come from message contents
-    assert doc.samples[0].texts == ["Hi"]
-    assert doc.samples[1].texts == ["Bye"]
+    # texts come from message contents with role-based names
+    assert [(t.name, t.value) for t in doc.samples[0].texts] == [("user_0", "Hi")]
+    assert [(t.name, t.value) for t in doc.samples[1].texts] == [("user_0", "Bye")]
 
     # Tokens should include template delimiters (more tokens than just "Hi")
     assert len(doc.samples[0].tokens) > 2

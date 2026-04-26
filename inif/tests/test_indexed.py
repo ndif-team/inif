@@ -3,25 +3,24 @@ import zipfile
 
 import pytest
 
-from inif.indexed import (
-    IndexedInifWriter,
-    iter_indexed_samples,
-    load_indexed,
-    read_indexed_header,
-    read_indexed_sample,
-    read_indexed_sample_summaries,
-    read_indexed_samples,
-    save_indexed,
+from inif.indexed import IndexedInifWriter, load_indexed, save_indexed
+from inif.io import iter_samples, load, read_info, read_samples, save
+from inif.models import (
+    InifDocument,
+    Metadata,
+    ModelInfo,
+    Sample,
+    Sequence,
+    Text,
+    TokenOrSeqRef,
 )
-from inif.io import load, save
-from inif.models import InifDocument, Metadata, ModelInfo, Sample, Sequence, Token
 
 
 def _indexed_doc() -> InifDocument:
     seq = Sequence(
         id="shared",
         n_tokens=2,
-        tokens=[Token(id=10, token="A"), Token(id=11, token="B")],
+        tokens=[TokenOrSeqRef(id=10, token="A"), TokenOrSeqRef(id=11, token="B")],
     )
     return InifDocument(
         metadata=Metadata(model=ModelInfo(name="indexed-test")),
@@ -29,22 +28,25 @@ def _indexed_doc() -> InifDocument:
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=-1, sequence_id="shared"), Token(id=20, token=" C")],
-                texts=["A B C"],
+                tokens=[
+                    TokenOrSeqRef(id=None, token="shared"),
+                    TokenOrSeqRef(id=20, token=" C"),
+                ],
+                texts=[Text(name="text_0", value="A B C")],
                 target="C",
                 input_tokens=2,
                 output_tokens=1,
             ),
             Sample(
                 id="s1",
-                tokens=[Token(id=30, token="D")],
-                texts=["D"],
+                tokens=[TokenOrSeqRef(id=30, token="D")],
+                texts=[Text(name="text_0", value="D")],
                 error="mock error",
             ),
             Sample(
                 id="s2",
-                tokens=[Token(id=-1, sequence_id="shared")],
-                texts=["A B"],
+                tokens=[TokenOrSeqRef(id=None, token="shared")],
+                texts=[Text(name="text_0", value="A B")],
             ),
         ],
     )
@@ -82,7 +84,6 @@ def test_save_indexed_writes_single_archive_with_manifest(tmp_path):
     assert manifest["total_samples"] == 3
     assert [entry["id"] for entry in manifest["samples"]] == ["s0", "s1", "s2"]
     assert manifest["samples"][0]["text_preview"] == "A B C"
-    assert manifest["samples"][0]["texts_preview"] == ["A B C"]
     assert summary["id"] == "s0"
     assert summary["text_preview"] == "A B C"
 
@@ -97,7 +98,9 @@ def test_load_indexed_roundtrip(tmp_path):
     assert loaded.metadata.model.name == "indexed-test"
     assert [sample.id for sample in loaded.samples] == ["s0", "s1", "s2"]
     assert loaded.sequences[0].tokens[1].token == "B"
-    assert loaded.samples[0].tokens[0].sequence_id == "shared"
+    # Sequence refs round-trip with id=None and the target id in ``token``.
+    assert loaded.samples[0].tokens[0].is_sequence_ref
+    assert loaded.samples[0].tokens[0].token == "shared"
 
 
 def test_save_load_dispatches_inif_suffix_to_indexed_archive(tmp_path):
@@ -109,49 +112,6 @@ def test_save_load_dispatches_inif_suffix_to_indexed_archive(tmp_path):
 
     assert loaded.metadata.model.name == "indexed-test"
     assert [sample.id for sample in loaded.samples] == ["s0", "s1", "s2"]
-
-
-def test_read_indexed_header_avoids_samples(tmp_path):
-    doc = _indexed_doc()
-    path = tmp_path / "doc.inif"
-    save_indexed(doc, path)
-
-    header = read_indexed_header(path)
-
-    assert header.metadata.model.name == "indexed-test"
-    assert [seq.id for seq in header.sequences] == ["shared"]
-    assert header.samples == []
-
-
-def test_iter_indexed_samples_streams_in_manifest_order(tmp_path):
-    doc = _indexed_doc()
-    path = tmp_path / "doc.inif"
-    save_indexed(doc, path)
-
-    assert [sample.id for sample in iter_indexed_samples(path)] == ["s0", "s1", "s2"]
-
-
-def test_read_indexed_sample_by_id(tmp_path):
-    doc = _indexed_doc()
-    path = tmp_path / "doc.inif"
-    save_indexed(doc, path)
-
-    sample = read_indexed_sample(path, "s1")
-
-    assert sample.id == "s1"
-    assert sample.error == "mock error"
-    assert sample.tokens[0].token == "D"
-
-
-def test_read_indexed_samples_by_id_loads_subset_in_requested_order(tmp_path):
-    doc = _indexed_doc()
-    path = tmp_path / "doc.inif"
-    save_indexed(doc, path)
-
-    samples = read_indexed_samples(path, ["s2", "s0"])
-
-    assert [sample.id for sample in samples] == ["s2", "s0"]
-    assert samples[1].tokens[1].token == " C"
 
 
 def test_load_indexed_can_load_selected_samples(tmp_path):
@@ -167,30 +127,6 @@ def test_load_indexed_can_load_selected_samples(tmp_path):
     loaded_without_refs = load_indexed(path, sample_ids=["s1"])
     assert [sample.id for sample in loaded_without_refs.samples] == ["s1"]
     assert loaded_without_refs.sequences == []
-
-
-def test_read_indexed_sample_missing_raises_keyerror(tmp_path):
-    doc = _indexed_doc()
-    path = tmp_path / "doc.inif"
-    save_indexed(doc, path)
-
-    with pytest.raises(KeyError):
-        read_indexed_sample(path, "missing")
-
-
-def test_read_indexed_sample_summaries_do_not_load_full_tokens(tmp_path):
-    doc = _indexed_doc()
-    path = tmp_path / "doc.inif"
-    save_indexed(doc, path)
-
-    summaries = read_indexed_sample_summaries(path)
-
-    assert summaries[0]["id"] == "s0"
-    assert summaries[0]["n_tokens"] == 2
-    assert summaries[0]["target"] == "C"
-    assert summaries[0]["text_preview"] == "A B C"
-    assert "tokens" not in summaries[0]
-    assert summaries[1]["error"] == "mock error"
 
 
 def test_incremental_writer_appends_samples(tmp_path):
@@ -213,14 +149,79 @@ def test_incremental_writer_flush_makes_partial_archive_readable(tmp_path):
         writer.write_sample(doc.samples[0])
         writer.flush()
 
-        summaries = read_indexed_sample_summaries(path)
-        sample = read_indexed_sample(path, "s0")
+        # Use the unified read API while the writer is still open.
+        info = read_info(path)
+        sample = read_samples(path, "s0")[0]
 
-        assert [summary["id"] for summary in summaries] == ["s0"]
-        assert summaries[0]["text_preview"] == "A B C"
+        assert [s["id"] for s in info.samples] == ["s0"]
+        assert info.samples[0]["text_preview"] == "A B C"
         assert sample.id == "s0"
 
         writer.write_sample(doc.samples[1])
 
     loaded = load_indexed(path)
     assert [sample.id for sample in loaded.samples] == ["s0", "s1"]
+
+
+# ---------------------------------------------------------------------------
+# Unified read API — exercised on both .inif and .inif.json
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=["doc.inif", "doc.inif.json"])
+def saved_doc_path(request, tmp_path):
+    """Save the canonical fixture document under both supported suffixes."""
+    doc = _indexed_doc()
+    path = tmp_path / request.param
+    save(doc, path)
+    return path
+
+
+def test_iter_samples_yields_in_document_order(saved_doc_path):
+    assert [s.id for s in iter_samples(saved_doc_path)] == ["s0", "s1", "s2"]
+
+
+def test_read_samples_subset_in_requested_order(saved_doc_path):
+    samples = read_samples(saved_doc_path, ["s2", "s0"])
+    assert [s.id for s in samples] == ["s2", "s0"]
+    assert samples[1].tokens[1].token == " C"
+
+
+def test_read_samples_accepts_single_id_string(saved_doc_path):
+    samples = read_samples(saved_doc_path, "s1")
+    assert [s.id for s in samples] == ["s1"]
+    assert samples[0].error == "mock error"
+    assert samples[0].tokens[0].token == "D"
+
+
+def test_read_samples_missing_id_raises_keyerror(saved_doc_path):
+    with pytest.raises(KeyError):
+        read_samples(saved_doc_path, "missing")
+
+
+def test_read_samples_rejects_duplicate_ids(saved_doc_path):
+    with pytest.raises(AssertionError, match="unique"):
+        read_samples(saved_doc_path, ["s0", "s0"])
+
+
+def test_read_info_returns_metadata_and_summaries(saved_doc_path):
+    info = read_info(saved_doc_path)
+
+    assert info.metadata.model.name == "indexed-test"
+    assert [s["id"] for s in info.samples] == ["s0", "s1", "s2"]
+    assert info.samples[0]["n_tokens"] == 2
+    assert info.samples[0]["target"] == "C"
+    assert info.samples[0]["text_preview"] == "A B C"
+    assert info.samples[1]["error"] == "mock error"
+    # No sequences and no full token streams in the header view.
+    assert "tokens" not in info.samples[0]
+    # Indexed-archive bookkeeping fields should be stripped from both formats.
+    assert "path" not in info.samples[0]
+    assert "index" not in info.samples[0]
+
+
+def test_read_info_does_not_inflate_sequences(saved_doc_path):
+    info = read_info(saved_doc_path)
+    # ``read_info`` returns a DocumentInfo (not an InifDocument) — so there is
+    # no ``sequences`` attribute at all, by construction.
+    assert not hasattr(info, "sequences")

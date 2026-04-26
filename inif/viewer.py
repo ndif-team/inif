@@ -61,7 +61,7 @@ _EXTRA_PALETTE = [
 ]
 
 # Token dict keys that do NOT produce an underline
-_EXTRA_SKIP = {"id", "token", "seq_id", "sequence_id", "_seq_ref"}
+_EXTRA_SKIP = {"id", "token", "_seq_ref"}
 
 
 def _annotation_color(name: str) -> str:
@@ -656,13 +656,17 @@ def _render_token(
     extra_colors: dict[str, str] | None = None,
     newline_chars: frozenset[str] = _DEFAULT_NL,
 ) -> str:
-    tok_id = tok_data.get("id", 0)
+    # Sequence refs serialize without ``id`` (None is stripped); the ``token``
+    # field then carries the target Sequence id. ``_seq_ref`` is set by the
+    # token-strip pass when it pre-expands a ref into per-piece sub-tokens.
+    raw_id = tok_data.get("id")
+    tok_id = 0 if raw_id is None else raw_id
     tok_str = tok_data.get("token") or ""
-    seq_id = tok_data.get("seq_id") or tok_data.get("sequence_id")
-    is_ref = tok_id < 0 or bool(tok_data.get("_seq_ref"))
+    is_ref = raw_id is None or bool(tok_data.get("_seq_ref"))
+    seq_id = tok_str if raw_id is None else tok_data.get("_ref_target")
 
-    # Extra fields for tooltip (exclude id, token, seq_id/sequence_id)
-    skip = ("id", "token", "seq_id", "sequence_id", "_seq_ref")
+    # Extra fields for tooltip (exclude id, token, _seq_ref bookkeeping)
+    skip = ("id", "token", "_seq_ref", "_ref_target")
     extra = {k: v for k, v in tok_data.items() if k not in skip}
     if annotations:
         extra["annotations"] = annotations
@@ -686,8 +690,12 @@ def _render_token(
     # Sequence ref — only apply fallback text if not already expanded
     if is_ref:
         classes.append("seq-ref")
-        if not tok_str:
-            # Not expanded by caller — show concatenated fallback
+        # When the token-strip pass already expanded the ref into a piece,
+        # ``raw_id`` is the piece's vocab id and ``tok_str`` is the piece;
+        # leave both alone. When the ref was passed through unexpanded,
+        # ``tok_str`` currently holds the target Sequence id — replace it
+        # with a concatenated fallback or a placeholder.
+        if raw_id is None:
             if seq_id and seq_id in seq_map:
                 seq_toks = seq_map[seq_id].get("tokens", [])
                 tok_str = "".join(t.get("token") or "" for t in seq_toks) or (
@@ -754,19 +762,24 @@ def _render_token_strip(
     annotation_colors = _collect_active_annotations(sample_data)
     parts = [f'<div class="inif-token-strip" data-has-annotations="{ha}">']
     for idx, tok in enumerate(tokens):
-        tok_id = tok.get("id", 0)
-        seq_id = tok.get("seq_id") or tok.get("sequence_id")
-        # Expand sequence refs into individual wrappable tokens
-        if tok_id < 0 and seq_id and seq_id in seq_map:
-            seq_toks = seq_map[seq_id].get("tokens", [])
+        raw_id = tok.get("id")
+        # Sequence refs serialize as ``{"token": "<seq_id>"}`` (id is None and
+        # stripped by compact mode). Expand each ref into wrappable per-piece
+        # sub-tokens so newlines inside the run still break visually.
+        if raw_id is None:
+            seq_id = tok.get("token")
+            if seq_id and seq_id in seq_map:
+                seq_toks = seq_map[seq_id].get("tokens", [])
+            else:
+                seq_toks = []
             if seq_toks:
                 for sub_tok in seq_toks:
                     sub_str = sub_tok.get("token") or ""
                     sub = {
-                        "id": sub_tok.get("id", tok_id),
+                        "id": sub_tok.get("id"),
                         "token": sub_str,
-                        "seq_id": seq_id,
                         "_seq_ref": True,
+                        "_ref_target": seq_id,
                     }
                     parts.append(
                         _render_token(
@@ -823,9 +836,16 @@ def _render_texts_panel(sample_data: dict) -> str:
         return ""
     parts = ["<h3>Texts</h3>", '<div class="inif-texts-panel">']
     for i, text in enumerate(texts):
-        safe_text = html.escape(str(text))
+        # ``text`` is a serialized Text dict ({"name", "value", "metadata"});
+        # fall back to a stringified value for legacy rows.
+        if isinstance(text, dict):
+            name = html.escape(str(text.get("name", str(i))))
+            value = html.escape(str(text.get("value", "")))
+        else:
+            name = str(i)
+            value = html.escape(str(text))
         parts.append(
-            f'<div class="inif-text-item"><strong>{i}:</strong> {safe_text}</div>'
+            f'<div class="inif-text-item"><strong>{name}:</strong> {value}</div>'
         )
     parts.append("</div>")
     return "\n".join(parts)
