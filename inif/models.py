@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
@@ -111,32 +111,6 @@ class Token(BaseModel):
         extra = self._extra()
         return dict(extra) if extra is not None else {}
 
-    # --- tags are a specific kind of extra ---------------------------
-
-    @property
-    def tags(self) -> list[str]:
-        return self.get_extra("tags", []) or []
-
-    def has_tag(self, tag: str) -> bool:
-        return tag in self.tags
-
-    def add_tag(self, tag: str) -> None:
-        tags = list(self.tags)
-        if tag in tags:
-            return
-        tags.append(tag)
-        self.set_extra("tags", tags)
-
-    def remove_tag(self, tag: str) -> None:
-        tags = list(self.tags)
-        if tag not in tags:
-            return
-        tags.remove(tag)
-        if tags:
-            self.set_extra("tags", tags)
-        else:
-            self.pop_extra("tags")
-
     # ------------------------------------------------------------------
     # Sequence expansion
     # ------------------------------------------------------------------
@@ -148,7 +122,7 @@ class Token(BaseModel):
         seq_map = {s.id: s for s in sequences}
         assert self.sequence_id in seq_map, f"Sequence '{self.sequence_id}' not found"
         seq = seq_map[self.sequence_id]
-        return [Token(id=t.id, token=t.token, sequence_id=seq.id) for t in seq.tokens]
+        return [Token(id=t.id, token=t.token) for t in seq.tokens]
 
 
 class Sequence(BaseModel):
@@ -173,6 +147,20 @@ class Span(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class TokenAnnotation(BaseModel):
+    name: str
+    ranges: list[tuple[int, int]] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_ranges(self) -> TokenAnnotation:
+        for start, end in self.ranges:
+            assert start < end, (
+                f"Annotation {self.name!r} has invalid range [{start}, {end})"
+            )
+        return self
+
+
 class SampleScore(BaseModel):
     scorer: str
     value: str | int | float | bool | list | dict
@@ -185,6 +173,7 @@ class Sample(BaseModel):
     id: str
     tokens: list[Token] = Field(default_factory=list)
     texts: list[str] = Field(default_factory=list)
+    annotations: list[TokenAnnotation] = Field(default_factory=list)
     spans: list[Span] = Field(default_factory=list)
     scores: list[SampleScore] = Field(default_factory=list)
     target: str | None = None
@@ -208,7 +197,7 @@ class Sample(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _validate_span_bounds(self) -> Sample:
+    def _validate_position_bounds(self) -> Sample:
         n = len(self.tokens)
         for span in self.spans:
             for pos in span.positions:
@@ -216,7 +205,76 @@ class Sample(BaseModel):
                     f"Span '{span.name}' position {pos} out of range "
                     f"for sample {self.id!r} (n_tokens={n})"
                 )
+        for annotation in self.annotations:
+            annotation.ranges = _merge_ranges(annotation.ranges)
+            for start, end in annotation.ranges:
+                assert 0 <= start < end <= n, (
+                    f"Annotation '{annotation.name}' range [{start}, {end}) "
+                    f"out of range for sample {self.id!r} (n_tokens={n})"
+                )
         return self
+
+    def annotate(
+        self,
+        name: str,
+        ranges: Iterable[tuple[int, int]],
+        metadata: dict | None = None,
+    ) -> TokenAnnotation:
+        merged = _merge_ranges(ranges)
+        if not merged:
+            return TokenAnnotation(name=name, metadata=dict(metadata or {}))
+        n = len(self.tokens)
+        for start, end in merged:
+            assert 0 <= start < end <= n, (
+                f"Annotation '{name}' range [{start}, {end}) out of range "
+                f"for sample {self.id!r} (n_tokens={n})"
+            )
+        md = dict(metadata or {})
+        for annotation in self.annotations:
+            if annotation.name == name and annotation.metadata == md:
+                annotation.ranges = _merge_ranges([*annotation.ranges, *merged])
+                return annotation
+        annotation = TokenAnnotation(name=name, ranges=merged, metadata=md)
+        self.annotations.append(annotation)
+        return annotation
+
+    def annotate_positions(
+        self,
+        name: str,
+        positions: Iterable[int],
+        metadata: dict | None = None,
+    ) -> TokenAnnotation:
+        return self.annotate(name, _positions_to_ranges(positions), metadata=metadata)
+
+    def annotation_positions(self, name: str) -> list[int]:
+        positions: set[int] = set()
+        for annotation in self.annotations:
+            if annotation.name != name:
+                continue
+            for start, end in annotation.ranges:
+                positions.update(range(start, end))
+        return sorted(positions)
+
+    def remove_annotation(self, name: str) -> None:
+        self.annotations = [ann for ann in self.annotations if ann.name != name]
+
+    def _replace_token_with_tokens(self, index: int, replacement: list[Token]) -> None:
+        assert 0 <= index < len(self.tokens), f"Token index {index} out of range"
+        assert replacement, "Replacement must contain at least one token"
+        delta = len(replacement) - 1
+        self.tokens = self.tokens[:index] + replacement + self.tokens[index + 1 :]
+        if delta == 0:
+            return
+        for annotation in self.annotations:
+            adjusted: list[tuple[int, int]] = []
+            for start, end in annotation.ranges:
+                if end <= index:
+                    adjusted.append((start, end))
+                elif start > index:
+                    adjusted.append((start + delta, end + delta))
+                else:
+                    adjusted.append((start, end + delta))
+            annotation.ranges = _merge_ranges(adjusted)
 
     def get_expanded_tokens(self, sequences: list[Sequence]) -> list[Token]:
         # Build the sequence map once per call instead of rebuilding it inside
@@ -236,7 +294,7 @@ class Sample(BaseModel):
             )
             seq = seq_map[token.sequence_id]
             for t in seq.tokens:
-                result.append(Token(id=t.id, token=t.token, sequence_id=seq.id))
+                result.append(Token(id=t.id, token=t.token))
         return result
 
     def get_tokens_by_positions(self, positions: list[int]) -> list[Token]:
@@ -274,11 +332,8 @@ class Sample(BaseModel):
                 n = seq.n_tokens
                 if current <= expanded_position < current + n:
                     offset = expanded_position - current
-                    expanded = [
-                        Token(id=t.id, token=t.token, sequence_id=seq.id)
-                        for t in seq.tokens
-                    ]
-                    self.tokens = self.tokens[:i] + expanded + self.tokens[i + 1 :]
+                    expanded = [Token(id=t.id, token=t.token) for t in seq.tokens]
+                    self._replace_token_with_tokens(i, expanded)
                     return i + offset, self.tokens[i + offset]
                 current += n
             else:
@@ -299,18 +354,11 @@ class TokenExtras(BaseModel):
     converters know what to expect. Not used at runtime — it only contributes
     to the JSON schema as a ``$defs`` entry.
 
-    Conventional ``role`` values: ``"system"``, ``"user"``, ``"assistant"``,
-    ``"template"``.
-
-    Conventional tags include: ``"generated"`` (model-produced),
-    ``"special"`` (special tokenizer ids), ``"number"``, ``"entity"``.
+    Repeated token labels such as chat roles, ``"generated"``, and
+    ``"reasoning"`` are stored in :class:`TokenAnnotation` ranges on
+    :class:`Sample`, not repeated on every token.
     """
 
-    tags: list[str] = Field(default_factory=list, description="User-assigned labels")
-    role: str | None = Field(
-        default=None,
-        description="Chat-template role: system | user | assistant | template",
-    )
     logprob: float | None = Field(
         default=None, description="Per-token log-probability from the model"
     )
@@ -398,3 +446,31 @@ class InifDocument(BaseModel):
         from inif.io import load
 
         return load(path, compress=compress)
+
+
+def _merge_ranges(ranges: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    ordered = sorted((int(start), int(end)) for start, end in ranges if start < end)
+    merged: list[tuple[int, int]] = []
+    for start, end in ordered:
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+        else:
+            prev_start, prev_end = merged[-1]
+            merged[-1] = (prev_start, max(prev_end, end))
+    return merged
+
+
+def _positions_to_ranges(positions: Iterable[int]) -> list[tuple[int, int]]:
+    sorted_positions = sorted({int(pos) for pos in positions})
+    if not sorted_positions:
+        return []
+    ranges: list[tuple[int, int]] = []
+    start = prev = sorted_positions[0]
+    for pos in sorted_positions[1:]:
+        if pos == prev + 1:
+            prev = pos
+            continue
+        ranges.append((start, prev + 1))
+        start = prev = pos
+    ranges.append((start, prev + 1))
+    return ranges

@@ -112,10 +112,10 @@ def test_deduplicate_returns_independent_tokens():
     )
 
     deduped = deduplicate_sequences(doc, min_length=2)
-    deduped.samples[0].tokens[0].add_tag("changed")
+    deduped.samples[0].tokens[0].set_extra("changed", True)
 
-    assert deduped.samples[0].tokens[0].has_tag("changed")
-    assert not doc.samples[0].tokens[0].has_tag("changed")
+    assert deduped.samples[0].tokens[0].get_extra("changed") is True
+    assert not doc.samples[0].tokens[0].has_extra("changed")
 
 
 def test_dedup_no_duplicates():
@@ -193,18 +193,17 @@ def test_dedup_skips_window_with_mismatched_ids():
     assert all(not t.is_sequence_ref for t in deduped.samples[1].tokens)
 
 
-def test_expanded_tokens_have_sequence_id(doc_for_dedup):
-    """Expanded tokens should carry the sequence_id they came from
-    AND keep their original token ids."""
+def test_expanded_tokens_drop_sequence_provenance(doc_for_dedup):
+    """expand_sequences should produce plain vocab tokens (no
+    ``sequence_id``) and drop the sequences list — running dedup again
+    rediscovers the same shared runs."""
     deduped = deduplicate_sequences(doc_for_dedup, min_length=3)
     expanded = expand_sequences(deduped)
 
-    seq_id = deduped.sequences[0].id
+    assert expanded.sequences == []
     expected_ids = [50256, 1212, 318]
     for sample in expanded.samples:
-        # First 3 tokens came from expansion
         for t, expected_id in zip(sample.tokens[:3], expected_ids):
-            assert t.sequence_id == seq_id
+            assert t.sequence_id is None
             assert t.id == expected_id
-        # Last token is original, no sequence_id
         assert sample.tokens[3].sequence_id is None

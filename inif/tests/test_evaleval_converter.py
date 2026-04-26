@@ -23,6 +23,7 @@ from inif.converters.evaleval import (
 )
 from inif.io import to_dict
 from inif.schema import validate
+from inif.selectors import select_by_annotation
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -284,11 +285,10 @@ def test_from_instance_records_multi_turn_with_tokenizer():
         tag_chat_roles=True,
     )
     assert doc.samples[0].interaction_type == "multi_turn"
-    tokens = doc.samples[0].tokens
-    roles = [t.get_extra("role") for t in tokens]
-    assert "user" in roles
-    assert "assistant" in roles
-    assert "template" in roles
+    sample = doc.samples[0]
+    assert sample.annotation_positions("user")
+    assert sample.annotation_positions("assistant")
+    assert sample.annotation_positions("template")
 
 
 def test_from_instance_records_agentic_tool_call_tokens_preserved():
@@ -433,13 +433,17 @@ def test_reasoning_tag_applied_via_char_span():
         deduplicate=False,
         tag_reasoning=True,
     )
-    tokens = doc.samples[0].tokens
-    tagged_text = "".join(t.token or "" for t in tokens if t.has_tag("reasoning"))
-    # The reasoning trace should be covered entirely by 'reasoning'-tagged tokens.
+    sample = doc.samples[0]
+    reasoning_tokens = select_by_annotation(sample, "reasoning").tokens
+    tagged_text = "".join(t.token or "" for t in reasoning_tokens)
+    # The reasoning trace should be covered entirely by reasoning-annotated tokens.
     assert tagged_text == "I think step by step."
-    # Tokens outside the reasoning span stay untagged.
+    # Tokens outside the reasoning span stay unannotated.
+    reasoning_positions = set(sample.annotation_positions("reasoning"))
     post_reasoning = "".join(
-        t.token or "" for t in tokens if not t.has_tag("reasoning")
+        t.token or ""
+        for i, t in enumerate(sample.tokens)
+        if i not in reasoning_positions
     )
     assert "Answer: 4" in post_reasoning
 
@@ -473,10 +477,16 @@ def test_reasoning_tag_applied_per_multi_turn_message():
         tag_generated=False,
         tag_chat_roles=False,
     )
-    tokens = doc.samples[0].tokens
-    tagged_text = "".join(t.token or "" for t in tokens if t.has_tag("reasoning"))
+    sample = doc.samples[0]
+    reasoning_tokens = select_by_annotation(sample, "reasoning").tokens
+    tagged_text = "".join(t.token or "" for t in reasoning_tokens)
     assert tagged_text == "think one. think two. "
-    untagged_text = "".join(t.token or "" for t in tokens if not t.has_tag("reasoning"))
+    reasoning_positions = set(sample.annotation_positions("reasoning"))
+    untagged_text = "".join(
+        t.token or ""
+        for i, t in enumerate(sample.tokens)
+        if i not in reasoning_positions
+    )
     assert "Answer 1" in untagged_text
     assert "Answer 2" in untagged_text
 

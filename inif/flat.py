@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 from inif._token_ops import CompiledRegexTag, compile_regex_tags
 from inif.models import InifDocument, Metadata, ModelInfo, Sample, Token
 
-RegexTag = tuple[str | re.Pattern[str], str]
+RegexAnnotation = tuple[str | re.Pattern[str], str]
 
 
 class FlatTokenStore(BaseModel):
@@ -17,8 +17,8 @@ class FlatTokenStore(BaseModel):
 
     This is an internal analysis representation, not a replacement file format.
     Tokens are addressed by global position; ``sample_offsets`` maps sample-local
-    ranges back to ``sample_ids``. Tags are sparse: each tag stores the global
-    positions carrying it.
+    ranges back to ``sample_ids``. Annotations are sparse: each annotation name
+    stores the global positions carrying it.
     """
 
     sample_ids: list[str]
@@ -26,7 +26,7 @@ class FlatTokenStore(BaseModel):
     token_ids: list[int]
     token_texts: list[str | None]
     sequence_ids: list[str | None] = Field(default_factory=list)
-    tags: dict[str, list[int]] = Field(default_factory=dict)
+    annotations: dict[str, list[int]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_arrays(self) -> FlatTokenStore:
@@ -49,10 +49,11 @@ class FlatTokenStore(BaseModel):
             )
             for prev, cur in zip(self.sample_offsets, self.sample_offsets[1:]):
                 assert prev <= cur, "sample_offsets must be monotonically increasing"
-        for tag, positions in self.tags.items():
+        for name, positions in self.annotations.items():
             for pos in positions:
                 assert 0 <= pos < n_tokens, (
-                    f"Tag {tag!r} position {pos} out of range (n_tokens={n_tokens})"
+                    f"Annotation {name!r} position {pos} out of range "
+                    f"(n_tokens={n_tokens})"
                 )
         return self
 
@@ -64,31 +65,44 @@ class FlatTokenStore(BaseModel):
     ) -> FlatTokenStore:
         """Build a flat view from ``doc``.
 
-        With ``expand_sequences=True`` (default), sequence refs are expanded and
-        their ``sequence_id`` is retained as provenance on the resulting flat
-        tokens.
+        With ``expand_sequences=True`` (default), sequence refs are expanded
+        into their constituent vocab tokens. The sample-flat ``sequence_ids``
+        array still records which shared run each materialised position came
+        from, even though the expanded ``Token`` objects themselves no longer
+        carry ``sequence_id``.
         """
         sample_ids: list[str] = []
         sample_offsets: list[int] = [0]
         token_ids: list[int] = []
         token_texts: list[str | None] = []
         sequence_ids: list[str | None] = []
-        tags: dict[str, list[int]] = {}
+        annotations: dict[str, list[int]] = {}
 
         for sample in doc.samples:
             sample_ids.append(sample.id)
-            tokens = (
-                sample.get_expanded_tokens(doc.sequences)
-                if expand_sequences
-                else sample.tokens
-            )
-            for token in tokens:
-                pos = len(token_ids)
-                token_ids.append(token.id)
-                token_texts.append(token.token)
-                sequence_ids.append(token.sequence_id)
-                for tag in token.tags:
-                    tags.setdefault(tag, []).append(pos)
+            local_to_global: list[tuple[int, int]] = []
+            for token in sample.tokens:
+                local_start = len(token_ids)
+                if expand_sequences and token.is_sequence_ref:
+                    expanded = token.expanded_tokens(doc.sequences)
+                else:
+                    expanded = [token]
+                provenance = token.sequence_id
+                for expanded_token in expanded:
+                    token_ids.append(expanded_token.id)
+                    token_texts.append(expanded_token.token)
+                    sequence_ids.append(provenance)
+                local_to_global.append((local_start, len(token_ids)))
+
+            for annotation in sample.annotations:
+                positions = annotations.setdefault(annotation.name, [])
+                for start, end in annotation.ranges:
+                    positions.extend(
+                        range(local_to_global[start][0], local_to_global[end - 1][1])
+                    )
+            for positions in annotations.values():
+                positions.sort()
+
             sample_offsets.append(len(token_ids))
 
         return cls(
@@ -97,7 +111,7 @@ class FlatTokenStore(BaseModel):
             token_ids=token_ids,
             token_texts=token_texts,
             sequence_ids=sequence_ids,
-            tags=tags,
+            annotations=annotations,
         )
 
     @property
@@ -133,7 +147,7 @@ class FlatTokenStore(BaseModel):
 
     def find_regexes(
         self,
-        regex_tags: list[RegexTag],
+        regex_tags: list[RegexAnnotation],
     ) -> dict[str, list[int]]:
         """Return global token positions matching each regex tag spec."""
         return self.find_compiled_regexes(compile_regex_tags(regex_tags))
@@ -158,14 +172,14 @@ class FlatTokenStore(BaseModel):
                     last_match_pos[tag] = pos
         return matches
 
-    def tag_regexes(self, regex_tags: list[RegexTag]) -> None:
-        """Apply regex tags over flat arrays without constructing Token objects."""
-        self.tag_compiled_regexes(compile_regex_tags(regex_tags))
+    def annotate_regexes(self, regex_tags: list[RegexAnnotation]) -> None:
+        """Apply regex annotations over flat arrays without constructing Tokens."""
+        self.annotate_compiled_regexes(compile_regex_tags(regex_tags))
 
-    def tag_compiled_regexes(self, regex_tags: list[CompiledRegexTag]) -> None:
-        existing = {tag: set(self.tags.get(tag, [])) for _, tag in regex_tags}
+    def annotate_compiled_regexes(self, regex_tags: list[CompiledRegexTag]) -> None:
+        existing = {tag: set(self.annotations.get(tag, [])) for _, tag in regex_tags}
         for _, tag in regex_tags:
-            self.tags.setdefault(tag, [])
+            self.annotations.setdefault(tag, [])
 
         for pos, text in enumerate(self.token_texts):
             if text is None:
@@ -174,36 +188,31 @@ class FlatTokenStore(BaseModel):
                 if pos in existing[tag]:
                     continue
                 if pattern.search(text):
-                    self.tags[tag].append(pos)
+                    self.annotations[tag].append(pos)
                     existing[tag].add(pos)
 
         for _, tag in regex_tags:
-            self.tags[tag].sort()
+            self.annotations[tag].sort()
 
-    def positions_by_tag(self, tag: str) -> list[int]:
-        return list(self.tags.get(tag, []))
+    def positions(self, annotation_name: str) -> list[int]:
+        return list(self.annotations.get(annotation_name, []))
 
-    def tokens_by_tag(self, tag: str) -> list[tuple[int, int, str | None]]:
+    def tokens(self, annotation_name: str) -> list[tuple[int, int, str | None]]:
         return [
             (pos, self.token_ids[pos], self.token_texts[pos])
-            for pos in self.tags.get(tag, [])
+            for pos in self.annotations.get(annotation_name, [])
         ]
 
-    def tag_counts(self) -> dict[str, int]:
-        return {tag: len(positions) for tag, positions in self.tags.items()}
+    def annotation_counts(self) -> dict[str, int]:
+        return {name: len(positions) for name, positions in self.annotations.items()}
 
     def to_document(self, metadata: Metadata | None = None) -> InifDocument:
         """Materialize a flat analysis document.
 
         The result keeps sample ids, token ids/text, sequence provenance, and
-        sparse tags. It intentionally emits flat samples and does not recreate
-        shared ``Sequence`` objects.
+        sparse annotations. It intentionally emits flat samples and does not
+        recreate shared ``Sequence`` objects.
         """
-        positions_to_tags: dict[int, list[str]] = {}
-        for tag, positions in self.tags.items():
-            for pos in positions:
-                positions_to_tags.setdefault(pos, []).append(tag)
-
         samples: list[Sample] = []
         for sample_id, start, end in zip(
             self.sample_ids,
@@ -217,10 +226,14 @@ class FlatTokenStore(BaseModel):
                     token=self.token_texts[pos],
                     sequence_id=self.sequence_ids[pos],
                 )
-                for tag in positions_to_tags.get(pos, []):
-                    token.add_tag(tag)
                 tokens.append(token)
-            samples.append(Sample(id=sample_id, tokens=tokens))
+            sample = Sample(id=sample_id, tokens=tokens)
+            for name, positions in self.annotations.items():
+                local_positions = [
+                    pos - start for pos in positions if start <= pos < end
+                ]
+                sample.annotate_positions(name, local_positions)
+            samples.append(sample)
 
         return InifDocument(
             metadata=metadata.model_copy(deep=True)

@@ -65,9 +65,6 @@ def sequences():
 
 @pytest.fixture
 def sample_tokens():
-    tok_content = Token(id=1332, token=" test")
-    tok_content.add_tag("content")
-
     tok_data = Token(
         id=764,
         token=".",
@@ -78,7 +75,7 @@ def sample_tokens():
     return [
         Token(id=-1, sequence_id="seq_0"),  # ref to seq 0
         Token(id=257, token=" a"),
-        tok_content,
+        Token(id=1332, token=" test"),
         tok_data,
         Token(id=-1, sequence_id="seq_1"),  # ref to seq 1
     ]
@@ -90,6 +87,10 @@ def sample(sample_tokens):
         id="sample_0",
         tokens=sample_tokens,
         texts=["System prompt", " a test."],
+        annotations=[
+            # index in sample.tokens list
+            {"name": "content", "ranges": [(2, 3)]},
+        ],
         spans=[
             Span(name="answer", positions=[2, 3]),
         ],

@@ -10,6 +10,7 @@ from inif.converters.inspect_ai import (
     _messages_to_tokens,
     from_eval_log,
 )
+from inif.selectors import select_by_annotation
 
 
 def _make_eval_log(
@@ -331,18 +332,10 @@ def test_from_eval_log_chat_roles():
     doc = from_eval_log(
         log, tokenizer=ChatTokenizer(), deduplicate=False, tag_chat_roles=True
     )
-    # All non-ref tokens should have role
-    for tok in doc.samples[0].tokens:
-        if not tok.is_sequence_ref:
-            assert "role" in (tok.model_extra or {}), (
-                f"Token {tok.token!r} missing role"
-            )
-
-    # Check specific roles
-    roles = [tok.model_extra.get("role") for tok in doc.samples[0].tokens]
-    assert "user" in roles
-    assert "assistant" in roles
-    assert "template" in roles
+    sample = doc.samples[0]
+    assert sample.annotation_positions("user")
+    assert sample.annotation_positions("assistant")
+    assert sample.annotation_positions("template")
 
 
 def _chat_tokenizer():
@@ -374,7 +367,7 @@ def _chat_tokenizer():
 
 
 def test_from_eval_log_tags_generated_tokens():
-    """Tokens belonging to the LAST assistant message get a 'generated' tag."""
+    """Tokens belonging to the LAST assistant message get generated annotation."""
     messages = [
         _make_message("user", "Hi"),
         _make_message("assistant", "Hello!"),
@@ -389,16 +382,12 @@ def test_from_eval_log_tags_generated_tokens():
         tag_chat_roles=False,
         tag_generated=True,
     )
-    tagged = [t for t in doc.samples[0].tokens if t.has_tag("generated")]
+    tagged = select_by_annotation(doc.samples[0], "generated").tokens
     # "Hello!" = 6 chars = 6 tokens
     assert len(tagged) == 6
     assert "".join(t.token for t in tagged) == "Hello!"
     # Tokens from earlier (template, user message) are NOT tagged.
-    assert not any(
-        t.has_tag("generated")
-        for t in doc.samples[0].tokens
-        if t.token not in {"H", "e", "l", "o", "!"} or t not in tagged
-    )
+    assert len(doc.samples[0].annotation_positions("generated")) == 6
 
 
 def test_from_eval_log_tag_generated_disabled():
@@ -416,7 +405,7 @@ def test_from_eval_log_tag_generated_disabled():
         tag_chat_roles=False,
         tag_generated=False,
     )
-    assert all(not t.has_tag("generated") for t in doc.samples[0].tokens)
+    assert doc.samples[0].annotation_positions("generated") == []
 
 
 def test_from_eval_log_attaches_logprobs():
@@ -447,12 +436,15 @@ def test_from_eval_log_attaches_logprobs():
         tag_generated=True,
         extract_logprobs=True,
     )
-    generated = [t for t in doc.samples[0].tokens if t.has_tag("generated")]
+    generated = select_by_annotation(doc.samples[0], "generated").tokens
     assert len(generated) == 6
     expected = [-0.1 * (i + 1) for i in range(6)]
     assert [t.get_extra("logprob") for t in generated] == expected
     # Non-response tokens have no logprob attached.
-    others = [t for t in doc.samples[0].tokens if not t.has_tag("generated")]
+    generated_positions = set(doc.samples[0].annotation_positions("generated"))
+    others = [
+        t for i, t in enumerate(doc.samples[0].tokens) if i not in generated_positions
+    ]
     assert all(not t.has_extra("logprob") for t in others)
 
 
@@ -480,8 +472,8 @@ def test_from_eval_log_logprobs_skipped_on_count_mismatch():
         tag_generated=True,
         extract_logprobs=True,
     )
-    # Generated tag still applied
-    assert any(t.has_tag("generated") for t in doc.samples[0].tokens)
+    # Generated annotation still applied
+    assert doc.samples[0].annotation_positions("generated")
     # No logprobs attached
     assert all(not t.has_extra("logprob") for t in doc.samples[0].tokens)
 

@@ -134,13 +134,13 @@ def test_render_html_xss_safety():
     assert "&lt;script&gt;" in html
 
 
-def test_save_html_from_gzipped_inif(doc, tmp_path):
-    """View command round-trip: save as gzipped .inif, load, render HTML."""
-    gz_path = tmp_path / "test.inif"
-    save(doc, gz_path)  # .inif is gzip-compressed
+def test_save_html_from_indexed_inif(doc, tmp_path):
+    """View command round-trip: save as indexed .inif, load, render HTML."""
+    inif_path = tmp_path / "test.inif"
+    save(doc, inif_path)
 
-    reloaded = load(gz_path)
-    out = tmp_path / "from_gz.html"
+    reloaded = load(inif_path)
+    out = tmp_path / "from_inif.html"
     save_html(reloaded, out)
     assert out.exists()
     content = out.read_text(encoding="utf-8")
@@ -149,13 +149,13 @@ def test_save_html_from_gzipped_inif(doc, tmp_path):
     assert "sample_0" in content
 
 
-def test_save_html_from_gzipped_json(doc, tmp_path):
-    """View command round-trip: save as .inif.json.gz, load, render HTML."""
-    gz_path = tmp_path / "test.inif.json.gz"
-    save(doc, gz_path)
+def test_save_html_from_plain_json(doc, tmp_path):
+    """View command round-trip: save as .inif.json, load, render HTML."""
+    json_path = tmp_path / "test.inif.json"
+    save(doc, json_path)
 
-    reloaded = load(gz_path)
-    out = tmp_path / "from_json_gz.html"
+    reloaded = load(json_path)
+    out = tmp_path / "from_json.html"
     save_html(reloaded, out)
     assert out.exists()
     content = out.read_text(encoding="utf-8")
@@ -318,100 +318,107 @@ def test_render_html_non_binary_value_shows_no_indicator():
     assert "\u2717" not in html
 
 
-# --- Role highlight tests ---
+# --- Annotation highlight tests ---
 
 
 def _set_extra(tok, key, value):
     tok.set_extra(key, value)
 
 
-def _make_role_doc():
-    tok_sys = Token(id=1, token="System:")
-    _set_extra(tok_sys, "role", "system")
-
-    tok_user = Token(id=2, token="Hello")
-    _set_extra(tok_user, "role", "user")
-
-    tok_asst = Token(id=3, token="Hi")
-    _set_extra(tok_asst, "role", "assistant")
-
+def _make_annotation_doc():
     return InifDocument(
-        metadata=Metadata(model=ModelInfo(name="role_test")),
+        metadata=Metadata(model=ModelInfo(name="annotation_test")),
         samples=[
-            Sample(id="r0", tokens=[tok_sys, tok_user, tok_asst]),
+            Sample(
+                id="a0",
+                tokens=[
+                    Token(id=1, token="System:"),
+                    Token(id=2, token="Hello"),
+                    Token(id=3, token="Hi"),
+                ],
+                annotations=[
+                    {"name": "system", "ranges": [(0, 1)]},
+                    {"name": "user", "ranges": [(1, 2)]},
+                    {"name": "assistant", "ranges": [(2, 3)]},
+                ],
+            ),
         ],
     )
 
 
-def test_render_html_role_highlight_data_attrs():
-    """Tokens with roles get data-role and data-role-bg attributes."""
-    doc = _make_role_doc()
+def test_render_html_annotation_highlight_data_attrs():
+    """Annotated tokens get annotation data attributes."""
+    doc = _make_annotation_doc()
     html = render_html(doc)
-    assert 'data-role="system"' in html
-    assert 'data-role="user"' in html
-    assert 'data-role="assistant"' in html
-    assert "data-role-bg=" in html
+    assert 'data-annotations="system"' in html
+    assert 'data-annotations="user"' in html
+    assert 'data-annotations="assistant"' in html
+    assert "data-annotation-bg=" in html
 
 
-def test_render_html_role_highlight_colors():
-    """Role tokens get correct background colors from palette."""
-    doc = _make_role_doc()
+def test_render_html_role_annotation_highlight_colors():
+    """Common chat-role annotations get stable background colors."""
+    doc = _make_annotation_doc()
     html = render_html(doc)
     assert "#d4e6f1" in html  # system
     assert "#d5f5e3" in html  # user
     assert "#fdebd0" in html  # assistant
 
 
-def test_render_html_role_has_roles_attr():
-    """Token strip gets data-has-roles attribute."""
-    doc = _make_role_doc()
+def test_render_html_has_annotations_attr():
+    """Token strip gets data-has-annotations attribute."""
+    doc = _make_annotation_doc()
     html = render_html(doc)
-    assert 'data-has-roles="true"' in html
+    assert 'data-has-annotations="true"' in html
 
 
-def test_render_html_no_roles_attr():
-    """Token strip without roles gets data-has-roles=false."""
+def test_render_html_no_annotations_attr():
+    """Token strip without annotations gets data-has-annotations=false."""
     doc = InifDocument(
-        metadata=Metadata(model=ModelInfo(name="no_role")),
+        metadata=Metadata(model=ModelInfo(name="no_annotation")),
         samples=[
             Sample(id="nr0", tokens=[Token(id=1, token="plain")]),
         ],
     )
     html = render_html(doc)
-    assert 'data-has-roles="false"' in html
+    assert 'data-has-annotations="false"' in html
 
 
-def test_render_html_role_unknown_fallback():
-    """Unknown role gets fallback color #f0f0f0."""
-    tok = Token(id=1, token="x")
-    _set_extra(tok, "role", "custom_role")
+def test_render_html_unknown_annotation():
+    """Unknown annotations still get highlight data."""
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="fallback")),
-        samples=[Sample(id="fb0", tokens=[tok])],
+        samples=[
+            Sample(
+                id="fb0",
+                tokens=[Token(id=1, token="x")],
+                annotations=[{"name": "custom_annotation", "ranges": [(0, 1)]}],
+            )
+        ],
     )
     html = render_html(doc)
-    assert "#f0f0f0" in html
-    assert 'data-role="custom_role"' in html
+    assert 'data-annotations="custom_annotation"' in html
+    assert "data-annotation-bg=" in html
 
 
 # --- Control panel tests ---
 
 
-def test_render_html_control_panel_with_roles():
-    """Control panel checkbox is checked when sample has roles."""
-    doc = _make_role_doc()
+def test_render_html_control_panel_with_annotations():
+    """Control panel checkbox is checked when sample has annotations."""
+    doc = _make_annotation_doc()
     html = render_html(doc)
     assert "inif-control-panel" in html
-    assert "inif-role-toggle" in html
+    assert "inif-annotation-toggle" in html
     assert "checked" in html
     # Should NOT be disabled
-    assert 'class="inif-role-toggle" checked' in html
+    assert 'class="inif-annotation-toggle" checked' in html
 
 
-def test_render_html_control_panel_no_roles():
-    """Control panel checkbox is disabled when sample has no roles."""
+def test_render_html_control_panel_no_annotations():
+    """Control panel checkbox is disabled when sample has no annotations."""
     doc = InifDocument(
-        metadata=Metadata(model=ModelInfo(name="no_role")),
+        metadata=Metadata(model=ModelInfo(name="no_annotation")),
         samples=[
             Sample(id="nr0", tokens=[Token(id=1, token="plain")]),
         ],
@@ -422,92 +429,31 @@ def test_render_html_control_panel_no_roles():
     assert 'label class="disabled"' in html
 
 
-def test_render_html_role_legend_in_control_panel():
-    """Role legend with swatches appears inside the control panel."""
-    doc = _make_role_doc()
+def test_render_html_annotation_legend_in_control_panel():
+    """Annotation legend with swatches appears inside the control panel."""
+    doc = _make_annotation_doc()
     html = render_html(doc)
-    assert "inif-role-legend" in html
-    assert "inif-role-swatch" in html
-    # Role names appear in the legend
+    assert "inif-annotation-legend" in html
+    assert "inif-annotation-swatch" in html
+    # Annotation names appear in the legend
     cp_start = html.index('<div class="inif-control-panel">')
-    cp_end = html.index("</div>", html.index("inif-role-legend", cp_start))
+    cp_end = html.index("</div>", html.index("inif-annotation-legend", cp_start))
     cp_section = html[cp_start:cp_end]
     assert "system" in cp_section
     assert "user" in cp_section
     assert "assistant" in cp_section
 
 
-def test_render_html_no_role_legend_without_roles():
-    """No role legend when sample has no roles."""
+def test_render_html_no_annotation_legend_without_annotations():
+    """No annotation legend when sample has no annotations."""
     doc = InifDocument(
-        metadata=Metadata(model=ModelInfo(name="no_role")),
+        metadata=Metadata(model=ModelInfo(name="no_annotation")),
         samples=[
             Sample(id="nr0", tokens=[Token(id=1, token="plain")]),
         ],
     )
     html = render_html(doc)
-    # inif-role-legend appears in CSS, but no actual legend div rendered
-    assert '<div class="inif-role-legend">' not in html
-
-
-# --- Tag highlight toggle tests ---
-
-
-def _make_tag_doc():
-    t0 = Token(id=1, token="hello")
-    _set_extra(t0, "tags", ["greeting"])
-    t1 = Token(id=2, token=" world")
-    _set_extra(t1, "tags", ["noun"])
-    return InifDocument(
-        metadata=Metadata(model=ModelInfo(name="tag_hl")),
-        samples=[
-            Sample(id="t0", tokens=[t0, t1]),
-        ],
-    )
-
-
-def test_render_html_tag_toggle_present_with_tags():
-    """Tag highlight checkbox is enabled when sample has tags."""
-    doc = _make_tag_doc()
-    html = render_html(doc)
-    assert 'class="inif-tag-toggle" checked' in html
-
-
-def test_render_html_tag_toggle_disabled_without_tags():
-    """Tag highlight checkbox is disabled when sample has no tags."""
-    doc = InifDocument(
-        metadata=Metadata(model=ModelInfo(name="no_tag")),
-        samples=[
-            Sample(id="nt0", tokens=[Token(id=1, token="plain")]),
-        ],
-    )
-    html = render_html(doc)
-    assert 'class="inif-tag-toggle" disabled' in html
-
-
-def test_render_html_tag_legend_in_control_panel():
-    """Tag legend with swatches appears inside the control panel."""
-    doc = _make_tag_doc()
-    html = render_html(doc)
-    assert "inif-tag-legend" in html
-    assert "inif-tag-swatch" in html
-    cp_start = html.index('<div class="inif-control-panel">')
-    cp_end = html.index("</div>", html.index("inif-tag-legend", cp_start))
-    cp_section = html[cp_start:cp_end]
-    assert "greeting" in cp_section
-    assert "noun" in cp_section
-
-
-def test_render_html_no_tag_legend_without_tags():
-    """No tag legend when sample has no tags."""
-    doc = InifDocument(
-        metadata=Metadata(model=ModelInfo(name="no_tag")),
-        samples=[
-            Sample(id="nt0", tokens=[Token(id=1, token="plain")]),
-        ],
-    )
-    html = render_html(doc)
-    assert '<div class="inif-tag-legend">' not in html
+    assert '<div class="inif-annotation-legend">' not in html
 
 
 # --- Sample header tests ---
@@ -523,32 +469,39 @@ def test_render_html_sample_header_stats(doc):
     assert "Output tokens" in html
 
 
-def test_render_html_tag_bg_data_attr():
-    """Token with tag gets data-tag-bg attribute."""
-    tok = Token(id=1, token="tagged")
-    _set_extra(tok, "tags", ["my_tag"])
+def test_render_html_annotation_bg_data_attr():
+    """Token with annotation gets data-annotation-bg attribute."""
     doc = InifDocument(
-        metadata=Metadata(model=ModelInfo(name="tag_test")),
-        samples=[Sample(id="t0", tokens=[tok])],
+        metadata=Metadata(model=ModelInfo(name="annotation_test")),
+        samples=[
+            Sample(
+                id="t0",
+                tokens=[Token(id=1, token="tagged")],
+                annotations=[{"name": "my_annotation", "ranges": [(0, 1)]}],
+            )
+        ],
     )
     html = render_html(doc)
-    assert "data-tag-bg=" in html
+    assert "data-annotation-bg=" in html
 
 
-def test_render_html_role_overrides_tag():
-    """When token has both role and tag, role bg takes priority."""
-    tok = Token(id=1, token="both")
-    _set_extra(tok, "role", "user")
-    _set_extra(tok, "tags", ["some_tag"])
+def test_render_html_multiple_annotations_listed():
+    """When a token has multiple annotations, all names are exposed."""
     doc = InifDocument(
-        metadata=Metadata(model=ModelInfo(name="priority")),
-        samples=[Sample(id="p0", tokens=[tok])],
+        metadata=Metadata(model=ModelInfo(name="multi_annotation")),
+        samples=[
+            Sample(
+                id="p0",
+                tokens=[Token(id=1, token="both")],
+                annotations=[
+                    {"name": "user", "ranges": [(0, 1)]},
+                    {"name": "some_annotation", "ranges": [(0, 1)]},
+                ],
+            )
+        ],
     )
     html = render_html(doc)
-    # Both data attrs present
-    assert "data-role-bg=" in html
-    assert "data-tag-bg=" in html
-    # Role color in inline style (takes priority)
+    assert 'data-annotations="user,some_annotation"' in html
     assert "#d5f5e3" in html
 
 
@@ -631,14 +584,17 @@ def test_render_html_no_extras_legend_plain_token():
     assert '<div class="inif-extras-legend">' not in html
 
 
-def test_render_html_role_tags_not_underlined():
-    """role and tags fields do NOT produce underlines."""
-    tok = Token(id=1, token="x")
-    _set_extra(tok, "role", "user")
-    _set_extra(tok, "tags", ["t"])
+def test_render_html_annotations_not_underlined():
+    """Sample annotations do not produce extra-field underlines."""
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="skip")),
-        samples=[Sample(id="s0", tokens=[tok])],
+        samples=[
+            Sample(
+                id="s0",
+                tokens=[Token(id=1, token="x")],
+                annotations=[{"name": "user", "ranges": [(0, 1)]}],
+            )
+        ],
     )
     html = render_html(doc)
     assert "box-shadow:" not in html

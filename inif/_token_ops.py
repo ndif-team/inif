@@ -28,19 +28,23 @@ def compile_regex_tags(
     ]
 
 
-def _apply_regex_tags(token: Token, regex_tags: list[CompiledRegexTag]) -> None:
+def _regex_matches(token: Token, regex_tags: list[CompiledRegexTag]) -> list[str]:
     text = token.token
     if text is None:
-        return
-    for pattern, tag in regex_tags:
-        if pattern.search(text):
-            token.add_tag(tag)
+        return []
+    return [tag for pattern, tag in regex_tags if pattern.search(text)]
 
 
-def _apply_predicate_tags(token: Token, predicate_tags: list[PredicateTag]) -> None:
-    for predicate, tag in predicate_tags:
-        if predicate(token):
-            token.add_tag(tag)
+def _predicate_matches(token: Token, predicate_tags: list[PredicateTag]) -> list[str]:
+    return [tag for predicate, tag in predicate_tags if predicate(token)]
+
+
+def _remap_annotations(sample: Sample, old_to_new: list[tuple[int, int]]) -> None:
+    for annotation in sample.annotations:
+        ranges: list[tuple[int, int]] = []
+        for start, end in annotation.ranges:
+            ranges.append((old_to_new[start][0], old_to_new[end - 1][1]))
+        annotation.ranges = ranges
 
 
 def apply_regex_tags(
@@ -51,18 +55,26 @@ def apply_regex_tags(
     """Apply regex tags, materializing sequence refs only when needed."""
     if not regex_tags:
         return
+    positions_by_tag: dict[str, list[int]] = {tag: [] for _, tag in regex_tags}
     if not sequences or not sample_has_sequence_refs(sample):
-        for token in sample.tokens:
-            _apply_regex_tags(token, regex_tags)
+        for pos, token in enumerate(sample.tokens):
+            for tag in _regex_matches(token, regex_tags):
+                positions_by_tag[tag].append(pos)
+        for tag, positions in positions_by_tag.items():
+            sample.annotate_positions(tag, positions)
         return
 
     seq_map = {seq.id: seq for seq in sequences}
     new_tokens: list[Token] = []
-    changed = False
+    old_to_new: list[tuple[int, int]] = []
     for token in sample.tokens:
+        new_start = len(new_tokens)
         if not token.is_sequence_ref:
-            _apply_regex_tags(token, regex_tags)
+            pos = len(new_tokens)
+            for tag in _regex_matches(token, regex_tags):
+                positions_by_tag[tag].append(pos)
             new_tokens.append(token)
+            old_to_new.append((new_start, len(new_tokens)))
             continue
 
         assert token.sequence_id is not None, "Sequence ref token must have sequence_id"
@@ -74,21 +86,25 @@ def apply_regex_tags(
             for seq_token in seq.tokens
         )
         if not should_materialize:
+            pos = len(new_tokens)
+            for tag in _regex_matches(token, regex_tags):
+                positions_by_tag[tag].append(pos)
             new_tokens.append(token)
+            old_to_new.append((new_start, len(new_tokens)))
             continue
 
-        changed = True
         for seq_token in seq.tokens:
-            real_token = Token(
-                id=seq_token.id,
-                token=seq_token.token,
-                sequence_id=seq.id,
-            )
-            _apply_regex_tags(real_token, regex_tags)
+            pos = len(new_tokens)
+            real_token = Token(id=seq_token.id, token=seq_token.token)
+            for tag in _regex_matches(real_token, regex_tags):
+                positions_by_tag[tag].append(pos)
             new_tokens.append(real_token)
+        old_to_new.append((new_start, len(new_tokens)))
 
-    if changed:
-        sample.tokens = new_tokens
+    _remap_annotations(sample, old_to_new)
+    sample.tokens = new_tokens
+    for tag, positions in positions_by_tag.items():
+        sample.annotate_positions(tag, positions)
 
 
 def apply_predicate_tags(
@@ -99,18 +115,26 @@ def apply_predicate_tags(
     """Apply predicate tags, materializing sequence refs only when needed."""
     if not predicate_tags:
         return
+    positions_by_tag: dict[str, list[int]] = {tag: [] for _, tag in predicate_tags}
     if not sequences or not sample_has_sequence_refs(sample):
-        for token in sample.tokens:
-            _apply_predicate_tags(token, predicate_tags)
+        for pos, token in enumerate(sample.tokens):
+            for tag in _predicate_matches(token, predicate_tags):
+                positions_by_tag[tag].append(pos)
+        for tag, positions in positions_by_tag.items():
+            sample.annotate_positions(tag, positions)
         return
 
     seq_map = {seq.id: seq for seq in sequences}
     new_tokens: list[Token] = []
-    changed = False
+    old_to_new: list[tuple[int, int]] = []
     for token in sample.tokens:
+        new_start = len(new_tokens)
         if not token.is_sequence_ref:
-            _apply_predicate_tags(token, predicate_tags)
+            pos = len(new_tokens)
+            for tag in _predicate_matches(token, predicate_tags):
+                positions_by_tag[tag].append(pos)
             new_tokens.append(token)
+            old_to_new.append((new_start, len(new_tokens)))
             continue
 
         assert token.sequence_id is not None, "Sequence ref token must have sequence_id"
@@ -121,18 +145,22 @@ def apply_predicate_tags(
             for seq_token in seq.tokens
         )
         if not should_materialize:
+            pos = len(new_tokens)
+            for tag in _predicate_matches(token, predicate_tags):
+                positions_by_tag[tag].append(pos)
             new_tokens.append(token)
+            old_to_new.append((new_start, len(new_tokens)))
             continue
 
-        changed = True
         for seq_token in seq.tokens:
-            real_token = Token(
-                id=seq_token.id,
-                token=seq_token.token,
-                sequence_id=seq.id,
-            )
-            _apply_predicate_tags(real_token, predicate_tags)
+            pos = len(new_tokens)
+            real_token = Token(id=seq_token.id, token=seq_token.token)
+            for tag in _predicate_matches(real_token, predicate_tags):
+                positions_by_tag[tag].append(pos)
             new_tokens.append(real_token)
+        old_to_new.append((new_start, len(new_tokens)))
 
-    if changed:
-        sample.tokens = new_tokens
+    _remap_annotations(sample, old_to_new)
+    sample.tokens = new_tokens
+    for tag, positions in positions_by_tag.items():
+        sample.annotate_positions(tag, positions)
