@@ -204,9 +204,7 @@ class FlatTokenStore(BaseModel):
         ]
 
     def annotation_counts(self) -> dict[str, int]:
-        return {
-            name: len(positions) for name, positions in self.annotations.items()
-        }
+        return {name: len(positions) for name, positions in self.annotations.items()}
 
     def to_document(self, metadata: Metadata | None = None) -> InifDocument:
         """Materialize a flat analysis document.

@@ -39,9 +39,7 @@ def _predicate_matches(token: Token, predicate_tags: list[PredicateTag]) -> list
     return [tag for predicate, tag in predicate_tags if predicate(token)]
 
 
-def _remap_annotations(
-    sample: Sample, old_to_new: list[tuple[int, int]]
-) -> None:
+def _remap_annotations(sample: Sample, old_to_new: list[tuple[int, int]]) -> None:
     for annotation in sample.annotations:
         ranges: list[tuple[int, int]] = []
         for start, end in annotation.ranges:

@@ -434,13 +434,16 @@ def test_reasoning_tag_applied_via_char_span():
         tag_reasoning=True,
     )
     sample = doc.samples[0]
-    tagged_text = "".join(t.token or "" for t in select_by_annotation(sample, "reasoning").tokens)
+    reasoning_tokens = select_by_annotation(sample, "reasoning").tokens
+    tagged_text = "".join(t.token or "" for t in reasoning_tokens)
     # The reasoning trace should be covered entirely by reasoning-annotated tokens.
     assert tagged_text == "I think step by step."
     # Tokens outside the reasoning span stay unannotated.
     reasoning_positions = set(sample.annotation_positions("reasoning"))
     post_reasoning = "".join(
-        t.token or "" for i, t in enumerate(sample.tokens) if i not in reasoning_positions
+        t.token or ""
+        for i, t in enumerate(sample.tokens)
+        if i not in reasoning_positions
     )
     assert "Answer: 4" in post_reasoning
 
@@ -475,11 +478,14 @@ def test_reasoning_tag_applied_per_multi_turn_message():
         tag_chat_roles=False,
     )
     sample = doc.samples[0]
-    tagged_text = "".join(t.token or "" for t in select_by_annotation(sample, "reasoning").tokens)
+    reasoning_tokens = select_by_annotation(sample, "reasoning").tokens
+    tagged_text = "".join(t.token or "" for t in reasoning_tokens)
     assert tagged_text == "think one. think two. "
     reasoning_positions = set(sample.annotation_positions("reasoning"))
     untagged_text = "".join(
-        t.token or "" for i, t in enumerate(sample.tokens) if i not in reasoning_positions
+        t.token or ""
+        for i, t in enumerate(sample.tokens)
+        if i not in reasoning_positions
     )
     assert "Answer 1" in untagged_text
     assert "Answer 2" in untagged_text

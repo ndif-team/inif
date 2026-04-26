@@ -332,9 +332,7 @@ class Sample(BaseModel):
                 n = seq.n_tokens
                 if current <= expanded_position < current + n:
                     offset = expanded_position - current
-                    expanded = [
-                        Token(id=t.id, token=t.token) for t in seq.tokens
-                    ]
+                    expanded = [Token(id=t.id, token=t.token) for t in seq.tokens]
                     self._replace_token_with_tokens(i, expanded)
                     return i + offset, self.tokens[i + offset]
                 current += n

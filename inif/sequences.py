@@ -193,7 +193,11 @@ def _replace_sequences_in_tokens(
             ok = True
             for j in range(seq_len):
                 w = tokens[i + j]
-                if (i + j) in blocked_positions or w.is_sequence_ref or _has_extra_fields(w):
+                if (
+                    (i + j) in blocked_positions
+                    or w.is_sequence_ref
+                    or _has_extra_fields(w)
+                ):
                     ok = False
                     break
                 if w.token != seq_toks[j] or w.id != seq_ids[j]:

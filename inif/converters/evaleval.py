@@ -302,7 +302,8 @@ def from_instance_records(
         deduplicate: Run sequence deduplication over the produced samples.
         min_sequence_length: Minimum length for common-sequence detection.
         tag_chat_roles: Add role annotations via character-span matching.
-        tag_generated: Annotate the last assistant message's tokens with ``"generated"``.
+        tag_generated: Annotate the last assistant message's tokens with
+            ``"generated"``.
         tag_reasoning: Annotate tokens overlapping the reasoning-trace span with
             ``"reasoning"``. Best-effort: silently skipped when the token stream
             doesn't round-trip cleanly to the formatted chat template.
@@ -380,9 +381,7 @@ def from_instance_records(
                 sample.tokens, msg_dicts, tokenizer, role="assistant", which="last"
             )
             if rng is not None:
-                sample.annotate(
-                    "generated", [rng], metadata={"source": "converter"}
-                )
+                sample.annotate("generated", [rng], metadata={"source": "converter"})
 
         if tag_reasoning:
             for msg_index, reasoning in _reasoning_spans_for_record(record):
