@@ -1,0 +1,114 @@
+---
+title: HTML Viewer
+description: Render an INIF document as a self-contained interactive HTML page.
+llms-description: render_html / save_html / show produce a standalone viewer with sample navigation, annotation highlighting, and per-token tooltips.
+---
+
+The viewer turns an `InifDocument` into a single HTML file with no server,
+no build step, and no external dependencies. It's the same renderer used by
+the `inif view` CLI command.
+
+## What you get
+
+- Collapsible sidebar listing every sample, with pass/fail indicators when
+  the sample carries scores.
+- Token-level display: each token is one element with hover tooltips
+  showing its id, string, and every extra field present.
+- Annotation highlighting with a color legend per sample. Roles
+  (`system` / `user` / `assistant` / `template`) get stable colors;
+  user-defined annotations are auto-assigned from a 12-color pastel
+  palette.
+- Span borders and underline indicators for tokens carrying extras (e.g.
+  `logprob`, `logit_lens`, `probe_score`).
+- Newline-aware token wrapping — visual line breaks are inserted after
+  newline tokens so multi-line outputs are readable.
+
+## Three entry points
+
+``` python
+from inif import render_html, save_html, show
+```
+
+| Function | Returns | Use when |
+|---|---|---|
+| `render_html(doc)` | `str` of HTML | You want to embed the markup or post-process it. |
+| `save_html(doc, path)` | `None` (writes file) | You want a file on disk. |
+| `show(doc)` | Jupyter `HTML` object | You're in a notebook. |
+
+All three accept the same shaping arguments:
+
+| Arg | Default | Effect |
+|---|---|---|
+| `compact` | `False` | When `True`, hides empty panels (no annotations / no extras / no scores). |
+| `title` | `None` | Custom page title. Falls back to source filename then to model name. |
+| `tokenizer` | `None` | When given, the tokenizer's byte-level newline (e.g. `Ċ` for GPT-2) is auto-detected so visual line breaks fire after BPE newline tokens too. |
+
+`save_html` also takes `source: str | Path | None` so it can default the
+title to the source filename. The CLI uses this to make the page title read
+like `traces.inif.json` instead of `inif: gpt2`.
+
+## From Jupyter
+
+``` python
+from inif import load, show
+
+doc = load("traces.inif.json")
+show(doc)
+```
+
+The page is rendered inline. Use `show(doc, compact=True)` when sharing in
+a notebook export to drop the empty panels.
+
+## To disk
+
+``` python
+from inif import save_html
+
+save_html(doc, "traces.html")
+save_html(doc, "traces.html", compact=True, title="Eval results — gpt2")
+```
+
+The output is fully self-contained — no external CSS or JS. You can open
+the file directly, share it, or commit it to a repo.
+
+## From the CLI
+
+``` bash
+inif view traces.inif.json                         # opens in browser
+inif view traces.inif.json -o traces.html          # saves to disk
+inif view traces.inif.json --compact --title "Run 42"
+```
+
+When `-o` is omitted, the CLI writes to a temp file and opens it in your
+default browser via `webbrowser.open`. See [the CLI reference](cli.qmd) for
+all flags.
+
+## Newline handling
+
+Tokenizers that split tokens by byte (GPT-2 family, most BPE variants)
+encode `"\n"` as a non-`"\n"` glyph (e.g. `"Ċ"`). Without the tokenizer,
+the viewer only knows about `"\n"` and won't break lines for those tokens.
+
+Pass `tokenizer` to opt in to auto-detection:
+
+``` python
+from transformers import AutoTokenizer
+from inif import save_html, load
+
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+doc = load("traces.inif.json")
+save_html(doc, "traces.html", tokenizer=tokenizer)
+```
+
+The CLI's `view` subcommand does *not* take a tokenizer — line breaks for
+byte-level newline glyphs require the Python API.
+
+## What's *not* in the viewer
+
+- Editing. The page is read-only; annotations and extras are baked in at
+  render time.
+- Live filtering across samples. The sidebar lists samples and you click
+  one at a time. For corpus-level analysis, query the document in Python
+  via the [selectors](../concepts/selection.qmd).
+- Custom theming. Colors are hard-coded for stability; if you need a
+  different palette, post-process the HTML or contribute a config.

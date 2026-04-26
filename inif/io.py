@@ -44,6 +44,18 @@ def to_dict(doc: InifDocument, compact: bool = True) -> dict:
 
 
 def from_dict(data: dict) -> InifDocument:
+    """Build an :class:`InifDocument` from a JSON-shaped dict.
+
+    The inverse of :func:`to_dict`. Runs the full Pydantic validation pass —
+    out-of-range annotation ranges, missing required fields, and Token
+    sentinel violations all raise here.
+
+    Args:
+        data: A dict matching the INIF JSON schema.
+
+    Returns:
+        The parsed :class:`InifDocument`.
+    """
     return InifDocument.model_validate(data)
 
 

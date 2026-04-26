@@ -1,0 +1,16 @@
+---
+title: inif.sequences
+description: Find shared token runs across samples and replace them with sequence references.
+reference: inif.sequences
+---
+
+The dedup pass finds contiguous token n-grams common to *all* samples and
+replaces each match with a single sequence-ref token. Expansion is the
+inverse. See [Sequences and deduplication](../concepts/sequences.qmd) for
+the algorithm and tuning guidance.
+
+## Operations
+
+### deduplicate_sequences
+
+### expand_sequences

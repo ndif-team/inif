@@ -1,0 +1,117 @@
+---
+title: Tokenizer Resolution
+description: How the eval converters decide which tokenizer to use, and how to override.
+llms-description: tokenizer="auto" auto-loads from the source model id; an explicit string or instance is used as-is with a mismatch warning; closed-source ids require an HF stand-in.
+---
+
+INIF documents always carry tokens — there is no opt-out. The eval
+converters ([`from_eval_log`](inspect_ai.qmd),
+[`from_instance_records`](evaleval.qmd) and friends) need a tokenizer that
+matches the model the trace came from. The `tokenizer=` argument on those
+entry points controls how the choice is made.
+
+## The three modes
+
+### `tokenizer="auto"` (default) or `tokenizer=None`
+
+Auto-load `AutoTokenizer.from_pretrained(<model id>, trust_remote_code=True)`
+based on the source's model id:
+
+- Inspect AI: `eval_log.eval.model`.
+- evaleval: aggregate `model_info.id` first, else first record's `model_id`.
+
+Routing prefixes are stripped before calling HF. The current allowlist is:
+
+```
+azureml, anthropic, bedrock, cohere, deepseek, fireworks, google, groq, hf,
+huggingface, mistral, mockllm, ollama, openai, perplexity, replicate,
+together, vertex, vllm
+```
+
+So `together/moonshotai/Kimi-K2.5` becomes `moonshotai/Kimi-K2.5` for the
+HF call. Genuinely-prefixed HF ids like `meta-llama/Llama-3.1-8B` are *not*
+chopped — the head must be in the allowlist *and* the tail must still
+contain a `/`.
+
+Raises `ValueError` when:
+
+- The source has no model id at all.
+- `AutoTokenizer.from_pretrained` fails (most commonly: closed-source ids
+  with no HF tokenizer to fetch).
+
+The error message tells you to pass `tokenizer=<hf-id-or-instance>` with
+an HF tokenizer that approximates the source model.
+
+### `tokenizer="<model-id>"` (explicit string)
+
+Loaded via `AutoTokenizer.from_pretrained(<id>, trust_remote_code=True)`.
+If the resolved id disagrees with the source's model id (after prefix
+stripping), a `UserWarning` is emitted:
+
+> Tokenizer mismatch: tokenizer (`'X'`) differs from the source eval's
+> model id (`'Y'`). Token-level data will reflect the supplied tokenizer,
+> not the original model. Pass `tokenizer="auto"` to auto-load the
+> matching tokenizer, or ignore this warning if the mismatch is
+> intentional.
+
+The warning is informational — conversion proceeds.
+
+### `tokenizer=<tokenizer instance>`
+
+Used as-is. Same mismatch warning rules apply, comparing the tokenizer's
+`name_or_path` against the source's model id.
+
+## Closed-source models
+
+OpenAI, Anthropic, Google, etc. don't publish HF tokenizers. The `auto`
+mode will raise `ValueError` for those ids. The recipe is:
+
+``` python
+doc = from_eval_file(
+    "logs/openai_gpt4.eval",
+    tokenizer="meta-llama/Llama-3.1-8B",   # any HF stand-in
+)
+```
+
+You'll get the mismatch warning. Token-level data — strings, ids,
+positions, role tags — will reflect the stand-in's tokenization, not
+GPT-4's. Token *counts* may differ from what the API reported under
+`usage.input_tokens` / `usage.output_tokens` (those values are still
+preserved on `Sample` from the original eval). Plan downstream analysis
+accordingly.
+
+## When to bother with an explicit tokenizer
+
+The auto-load does the right thing in the common cases. Reach for an
+explicit override when:
+
+- You need deterministic builds across machines that may not have the
+  exact same HF cache state — pin to a specific revision via
+  `AutoTokenizer.from_pretrained(id, revision="...")` and pass the
+  instance.
+- The source model id is closed-source (see above).
+- You want cross-model studies through a shared tokenizer — the warning
+  is the price of admission.
+- The auto-detected id is an alias whose canonical HF repo has been
+  deleted or renamed; pass the working id directly.
+
+## Why the resolver is centralised
+
+Both eval converters call the same
+[`resolve_tokenizer(tokenizer, source_model_id)`](../reference/inif.converters.inspect_ai.qmd)
+helper from `inif.converters._tokenize`. Keeping it in one place means:
+
+- The provider allowlist is consistent across converters.
+- The mismatch-warning text is consistent.
+- The "tokens are mandatory" invariant is enforced in one place — every
+  call returns a usable tokenizer or raises.
+
+If you write a new converter, call `resolve_tokenizer` rather than
+inventing your own.
+
+## Decode strategy (separate from resolution)
+
+Once a tokenizer is chosen, the converters pick one of three *decode
+strategies* per archive — that is independent of tokenizer resolution and
+is documented under
+[the Inspect AI converter](inspect_ai.qmd#decoding-strategy).

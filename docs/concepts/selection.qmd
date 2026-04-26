@@ -1,0 +1,155 @@
+---
+title: Selecting Tokens and Samples
+description: Picking out token positions and sample subsets using INIF's selectors.
+llms-description: Use select_by_position / select_by_annotation / select_by_span / select_by_sequence_id for tokens, and filter_samples_by_score / InifDocument.subset for samples.
+---
+
+INIF's selectors are intentionally tiny — a handful of pure functions that
+take a `Sample` (or `InifDocument`) and return a `TokenSelection` (or list).
+Compose them rather than building a query DSL.
+
+## TokenSelection
+
+Every token-level selector returns a `TokenSelection`:
+
+``` python
+from inif import TokenSelection
+```
+
+``` python
+@dataclass
+class TokenSelection:
+    sample_id: str | int
+    tokens: list[Token]
+    positions: list[int]
+```
+
+`positions` always reflects the actual sample-local indices (sorted,
+deduplicated). `tokens` is the parallel list of `Token` objects pulled from
+those positions.
+
+## Token selectors
+
+### By position
+
+``` python
+from inif import select_by_position
+
+select_by_position(sample, 5)               # one position
+select_by_position(sample, [3, 5, 7])       # explicit list
+select_by_position(sample, slice(0, 10))    # slice
+select_by_position(sample, slice(-5, None)) # last 5
+```
+
+Slices are resolved against `len(sample.tokens)` via `slice.indices(n)`, so
+negative starts and step-2 slices behave like Python's normal slicing. Out
+of range integers are silently dropped (they just don't appear in `tokens`).
+
+### By annotation
+
+``` python
+from inif import select_by_annotation
+
+selection = select_by_annotation(sample, "generated")
+```
+
+Pulls every position covered by *any* annotation whose `name` matches —
+positions are flattened across all the ranges of every matching annotation,
+so it works whether the annotation has one range or twenty.
+
+### By sequence id
+
+``` python
+from inif import select_by_sequence_id
+
+selection = select_by_sequence_id(sample, "seq_0")
+```
+
+Returns the sequence-ref tokens that point at `seq_0`. Useful for finding
+*where* a shared run is referenced in a sample without expanding it.
+
+### By span
+
+``` python
+from inif import select_by_span
+
+selection = select_by_span(sample, "answer_span")
+```
+
+Unions the positions across every `Span` whose `name` matches.
+
+## Sample selectors
+
+### By score
+
+``` python
+from inif import filter_samples_by_score
+
+failures = filter_samples_by_score(
+    doc, scorer="exact_match", predicate=lambda v: v == 0
+)
+correct = filter_samples_by_score(
+    doc, scorer="exact_match", predicate=lambda v: v == 1
+)
+```
+
+Returns a `list[Sample]` (not a new document). The predicate sees the raw
+`SampleScore.value`, which can be `str | int | float | bool | list | dict`
+depending on the scorer.
+
+### By arbitrary predicate
+
+`InifDocument.filter_samples(predicate)` returns the matching samples:
+
+``` python
+long_samples = doc.filter_samples(lambda s: len(s.tokens) > 1000)
+```
+
+For a self-contained sub-document — pruned sequences, deep-copied content
+— use `subset` instead:
+
+``` python
+mini_doc = doc.subset(lambda s: s.id in {"sample_3", "sample_7"})
+```
+
+`subset` rebuilds the sequence list to contain only sequences referenced by
+the kept samples, so the resulting document is independent and minimal.
+
+## Composing selectors
+
+Selectors are pure — chain them however you want:
+
+``` python
+from inif import filter_samples_by_score, select_by_annotation
+
+failures = filter_samples_by_score(
+    doc, scorer="exact_match", predicate=lambda v: v == 0
+)
+generated_tokens = [
+    select_by_annotation(s, "generated") for s in failures
+]
+```
+
+Or pull positions across the whole document and feed them to nnsight /
+nnterp:
+
+``` python
+all_positions = []
+for sample in doc.samples:
+    sel = select_by_annotation(sample, "user")
+    for pos in sel.positions:
+        all_positions.append((sample.id, pos))
+```
+
+## What about flat-array scans?
+
+When you need to scan tokens *across* samples — counting matches over an
+entire document, computing per-token statistics, looking for regex hits at
+the corpus level — the `Sample`-by-`Sample` API gets slow because every
+loop reconstructs Python objects. For those workloads, see
+[`FlatTokenStore`](../reference/inif.flat.qmd), which exposes flat
+parallel arrays of token ids, strings, and sequence provenance, plus regex
+helpers that operate directly on those arrays.
+
+`FlatTokenStore` is an analysis representation, not a replacement file
+format — call `FlatTokenStore.from_document(doc)` to materialise one.

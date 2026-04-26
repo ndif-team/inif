@@ -1,0 +1,128 @@
+---
+title: Command-line Interface
+description: The inif CLI for converting eval logs and viewing INIF files in the browser.
+llms-description: inif convert txt / eval / evaleval build documents from raw text, Inspect AI logs, or evaleval records; inif view renders the HTML viewer.
+---
+
+The `inif` CLI exposes the same converters and viewer that the Python API
+does. It is the right tool for one-off conversions, batch jobs, and
+quick-look browsing.
+
+``` bash
+inif --help
+```
+
+## Subcommands
+
+| Command | Purpose |
+|---|---|
+| `inif view <input>` | Open an INIF document in the HTML viewer. |
+| `inif convert txt <inputs>` | Tokenize raw text files / strings. |
+| `inif convert eval <inputs>` | Convert Inspect AI `.eval` logs. |
+| `inif convert evaleval <input>` | Convert every_eval_ever instance records. |
+
+All converters write `.inif.json` by default. To produce the indexed
+archive instead, give an output path with the `.inif` suffix
+(`-o traces.inif`).
+
+## `inif view`
+
+``` bash
+inif view traces.inif.json                 # opens in default browser
+inif view traces.inif -o traces.html       # writes self-contained HTML
+inif view traces.inif.json --compact       # hide empty panels
+inif view traces.inif.json --title "Run 42"
+```
+
+When `-o` is omitted, the rendered HTML is written to a temp file and
+opened in your default browser. With `-o`, the file is written to that
+path and *not* opened.
+
+## `inif convert txt`
+
+Tokenize raw text files (or directories) with a HuggingFace tokenizer.
+
+``` bash
+inif convert txt input.txt -m gpt2
+inif convert txt corpus/ -m gpt2 --glob "*.md"
+inif convert txt a.txt b.txt c.txt -m gpt2 -o batch.inif.json
+```
+
+Each input file becomes one `Sample`; sample ids default to the filename.
+Sequence deduplication runs by default — pass `--no-dedup` to skip it.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `-m, --model` | required | Tokenizer model id (passed to `AutoTokenizer.from_pretrained`). |
+| `--revision` | unset | Pinned model revision. Stamped into `metadata.model.revision`. |
+| `--min-seq-length` | `3` | Minimum n-gram length for sequence dedup. |
+| `--glob` | `*.txt` | When an input is a directory, glob pattern to filter files. |
+| `--no-dedup` | off | Disable sequence deduplication. |
+| `-o, --output` | first input's name with `.inif.json` | Output path. |
+
+## `inif convert eval`
+
+Convert one or more Inspect AI `.eval` logs.
+
+``` bash
+inif convert eval logs/run.eval
+inif convert eval logs/*.eval -o batch.inif.json
+inif convert eval logs/run.eval -m meta-llama/Llama-3.1-8B
+inif convert eval logs/run.eval --no-tag-chat-roles --no-dedup
+```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `-m, --model` | autodetect | Tokenizer override. By default, the tokenizer is auto-loaded from the eval's model id (with routing prefixes like `together/` stripped). See [Tokenizer resolution](../converters/tokenizers.qmd). |
+| `--revision` | unset | Pin `metadata.model.revision`. |
+| `--min-seq-length` | `3` | Sequence dedup minimum. |
+| `--no-tag-chat-roles` | off | Skip chat-template role annotations. |
+| `--no-dedup` | off | Skip sequence deduplication. |
+| `-o, --output` | input stem with `.inif.json` | Output path. |
+
+When multiple inputs are given, each writes to its own output file (the
+`-o` flag applies to all of them — useful when you only have one input).
+
+## `inif convert evaleval`
+
+Convert
+[every_eval_ever](https://github.com/evaleval/every_eval_ever) instance-level
+records.
+
+``` bash
+# Local JSON / JSONL
+inif convert evaleval instances.jsonl
+inif convert evaleval instances.json --aggregate eval.json
+
+# From the EEE_datastore on HuggingFace
+inif convert evaleval --hf-config theory_of_mind_samples
+inif convert evaleval --hf-config theory_of_mind_samples \
+                     --hf-aggregate-config theory_of_mind \
+                     --limit 100
+```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `input` | (positional) | Path to instance records (`.json` or `.jsonl`). Omit when using `--hf-config`. |
+| `--aggregate` | unset | Optional aggregate `eval.json` for document-level metadata. |
+| `--hf-config` | unset | Config name from `evaleval/EEE_datastore`. |
+| `--hf-split` | `samples` | HF split for the records. |
+| `--hf-repo` | `evaleval/EEE_datastore` | HF dataset repo (override for testing). |
+| `--hf-aggregate-config` | unset | Paired aggregate config (non-`_samples` counterpart). |
+| `--limit` | unset | Cap the number of records converted. |
+| `-m, --model` | autodetect | Tokenizer override. Same rules as `convert eval`. |
+| `--revision` | unset | Pin `metadata.model.revision`. |
+| `--min-seq-length` | `3` | Sequence dedup minimum. |
+| `--no-tag-chat-roles` | off | Skip chat-template role annotations. |
+| `--no-dedup` | off | Skip sequence deduplication. |
+| `-o, --output` | derived from input or HF config | Output path. |
+
+The HF route streams records (it does not download the entire dataset
+locally) and respects `--limit` while iterating.
+
+## Exit codes
+
+The CLI exits with status `1` and prints a message to stderr when no input
+files match (`inif convert txt`). All other failures bubble up as raw
+Python tracebacks — the CLI is intentionally a thin wrapper around the
+Python API.

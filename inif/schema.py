@@ -21,10 +21,26 @@ def get_schema() -> dict:
 
 
 def validate(data: dict) -> None:
+    """Validate a JSON-shaped dict against the INIF schema.
+
+    Runs the same Pydantic validators as :func:`load` but discards the
+    parsed object. Raises ``pydantic.ValidationError`` on failure.
+
+    Args:
+        data: The dict to validate.
+    """
     InifDocument.model_validate(data)
 
 
 def write_schema(path: str | Path) -> None:
+    """Write the INIF JSON schema to ``path``.
+
+    Parent directories are created if they don't exist. The file is written
+    with two-space indentation and a trailing newline.
+
+    Args:
+        path: Destination file path.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:

@@ -1,0 +1,171 @@
+---
+title: Inspect AI Converter
+description: Convert Inspect AI EvalLog objects and .eval files into INIF documents.
+llms-description: from_eval_log / from_eval_file convert Inspect AI eval logs; per-token logprobs and "generated" annotations attach automatically when available.
+---
+
+Inspect AI is the primary upstream the format was designed around — the
+converter preserves messages, scores, generation config, eval / run ids,
+per-token logprobs, and the model's response region as a `generated`
+annotation.
+
+``` python
+from inif.converters.inspect_ai import from_eval_log, from_eval_file
+```
+
+Requires the `inspect` extra:
+
+``` bash
+pip install "inif[inspect]"
+```
+
+## `from_eval_file`
+
+The thin wrapper for the file-based case:
+
+``` python
+from inif.converters.inspect_ai import from_eval_file
+
+doc = from_eval_file("logs/run.eval")
+```
+
+It calls `inspect_ai.log.read_eval_log(path)` then forwards to
+`from_eval_log`. The source path is appended to `metadata.sources`.
+
+## `from_eval_log`
+
+The full-fat entry point. Pass an `inspect_ai.log.EvalLog` you already
+have in memory:
+
+``` python
+from inspect_ai.log import read_eval_log
+from inif.converters.inspect_ai import from_eval_log
+
+eval_log = read_eval_log("logs/run.eval")
+doc = from_eval_log(eval_log, tokenizer="meta-llama/Llama-3.1-8B")
+```
+
+| Arg | Default | Effect |
+|---|---|---|
+| `tokenizer` | `"auto"` | See [Tokenizer resolution](tokenizers.qmd). |
+| `include_messages` | `True` | Include per-message text segments on `Sample.texts`. |
+| `deduplicate` | `True` | Run [sequence dedup](../concepts/sequences.qmd). |
+| `min_sequence_length` | `3` | Minimum n-gram length for dedup. |
+| `tag_chat_roles` | `True` | Annotate `system` / `user` / `assistant` / `template`. |
+| `tag_generated` | `True` | Tag the model's response with `"generated"` (last assistant message). |
+| `extract_logprobs` | `True` | Attach per-token logprobs when the eval log carries them. |
+
+## What gets preserved
+
+### Per-sample fields
+
+| `Sample` field | Inspect AI source |
+|---|---|
+| `id` | `inspect_sample.id` (coerced to str). |
+| `texts` | Message contents extracted from `inspect_sample.messages`. |
+| `tokens` | `tokenizer.apply_chat_template(messages, tokenize=True)`. |
+| `scores` | `inspect_sample.scores` — one `SampleScore` per scorer. |
+| `target` | `str(inspect_sample.target)` if present. |
+| `input_tokens`, `output_tokens` | `inspect_sample.usage.input_tokens` / `.output_tokens`. |
+
+### Document metadata
+
+| `Metadata` field | Inspect AI source |
+|---|---|
+| `model.name` | `eval_log.eval.model`. |
+| `model.revision` | Tokenizer's `_commit_hash` when available. |
+| `model.generation_config` | `eval_log.plan.config` — captures `max_tokens`, `temperature`, `top_p`, `top_k`, `stop_seqs`, `frequency_penalty`, `presence_penalty`, `seed`. |
+| `source_eval` | `framework="inspect_ai"`, plus `framework_version`, `task`, `task_version`, `eval_id`, `run_id`. |
+| `total_time` | `(eval_log.stats.completed_at - started_at).total_seconds()`. |
+| `packages` | `inif`, `transformers`, `inspect_ai` versions. |
+
+## Annotations
+
+With the defaults, every sample gets:
+
+- **Chat role annotations** (`tag_chat_roles=True`): `user`, `assistant`,
+  `system`, and `template` ranges via character-span matching against the
+  formatted chat template. Best-effort: silently skipped when a
+  tokenizer's per-token decode doesn't round-trip.
+- **`generated` annotation** (`tag_generated=True`): covers the last
+  assistant message — the model's actual response — with
+  `metadata={"source": "converter"}`.
+
+The `generated` annotation is added *before* sequence deduplication so the
+response region never collapses into a shared sequence (annotations block
+dedup).
+
+## Per-token logprobs
+
+When the eval log includes choice logprobs
+(`output.choices[0].logprobs.content`) and `extract_logprobs=True`, the
+per-token logprobs are attached to the response tokens via
+`set_extra("logprob", lp)`. The viewer renders them as hover tooltips and
+underline indicators.
+
+This is best-effort: when the eval-source tokenization disagrees with the
+configured tokenizer on token count, the logprobs are silently skipped
+rather than mis-aligned. To force a match, pass the tokenizer that
+produced the original logprobs.
+
+## Decoding strategy
+
+The converter picks one decode path per archive (not per sample) based on
+what the tokenizer supports:
+
+1. **Offset mapping** — fast tokenizers exposing
+   `return_offsets_mapping`. Per-token strings are exact slices of the
+   formatted template. Bulletproof for any character.
+2. **Byte-level slicing** — byte-level BPE tokenizers (e.g. Kimi's
+   tiktoken variant) without offset support. Rebuilds per-token bytes via
+   `tokenizer.byte_decoder` + `encoder`.
+3. **Per-token decode with cache** — fallback for tokenizers with neither
+   of the above. May produce U+FFFD for multi-byte characters split
+   across BPE tokens; chat-role tagging silently skips affected samples.
+
+The choice is probed once on the first sample and reused, so the cost is
+amortized across the whole conversion.
+
+## Common patterns
+
+### Convert one file
+
+``` python
+from inif import save
+from inif.converters.inspect_ai import from_eval_file
+
+doc = from_eval_file("logs/run.eval")
+save(doc, "run.inif.json")
+```
+
+### Override the tokenizer
+
+``` python
+doc = from_eval_file("logs/run.eval", tokenizer="meta-llama/Llama-3.1-8B")
+```
+
+A `UserWarning` is emitted if the tokenizer disagrees with the eval log's
+model id. The warning is informational only — the conversion proceeds.
+
+### Batch from the CLI
+
+``` bash
+inif convert eval logs/*.eval
+```
+
+Each input writes to its own output file in the same directory.
+
+### Filter to failing samples after conversion
+
+``` python
+from inif import filter_samples_by_score
+
+failures = filter_samples_by_score(
+    doc, scorer="exact_match", predicate=lambda v: v == 0
+)
+mini_doc = doc.subset(lambda s: s.id in {f.id for f in failures})
+```
+
+Use `subset` (not just `filter_samples`) when you want the result to be a
+self-contained document with its sequence list pruned to references in the
+kept samples.

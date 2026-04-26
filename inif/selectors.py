@@ -8,6 +8,13 @@ from inif.models import InifDocument, Sample, Token
 
 @dataclass
 class TokenSelection:
+    """A subset of tokens from a single sample, returned by every selector.
+
+    ``positions`` always reflects the actual sample-local indices (sorted,
+    deduplicated). ``tokens`` is the parallel list of :class:`Token`
+    objects pulled from those positions.
+    """
+
     sample_id: str | int
     tokens: list[Token] = field(default_factory=list)
     positions: list[int] = field(default_factory=list)
@@ -16,6 +23,17 @@ class TokenSelection:
 def select_by_position(
     sample: Sample, positions: int | list[int] | slice
 ) -> TokenSelection:
+    """Select tokens by sample-local position.
+
+    Args:
+        sample: The sample to select from.
+        positions: A single index, a list of indices, or a ``slice``. Slices
+            are resolved against ``len(sample.tokens)`` via ``slice.indices``,
+            so negative starts behave like Python's normal slicing.
+
+    Returns:
+        A :class:`TokenSelection` whose ``positions`` are sorted and unique.
+    """
     n = len(sample.tokens)
     if isinstance(positions, int):
         positions = [positions]
@@ -32,6 +50,18 @@ def select_by_position(
 
 
 def select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection:
+    """Select every token covered by an annotation with the given name.
+
+    Positions are flattened across all the ranges of every matching
+    annotation, so this works whether the annotation has one range or many.
+
+    Args:
+        sample: The sample to select from.
+        annotation_name: The annotation name to match.
+
+    Returns:
+        A :class:`TokenSelection` with positions sorted ascending.
+    """
     positions = sample.annotation_positions(annotation_name)
     tokens = sample.get_tokens_by_positions(positions)
     return TokenSelection(
@@ -42,6 +72,18 @@ def select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection
 
 
 def select_by_sequence_id(sample: Sample, seq_id: str) -> TokenSelection:
+    """Select sequence-ref tokens that point at the given sequence id.
+
+    Useful for finding *where* a shared run is referenced in a sample
+    without expanding it.
+
+    Args:
+        sample: The sample to select from.
+        seq_id: The :class:`Sequence` id to match (e.g. ``"seq_0"``).
+
+    Returns:
+        A :class:`TokenSelection` containing the ref tokens.
+    """
     tokens = []
     positions = []
     for i, t in enumerate(sample.tokens):
@@ -56,6 +98,17 @@ def select_by_sequence_id(sample: Sample, seq_id: str) -> TokenSelection:
 
 
 def select_by_span(sample: Sample, span_name: str) -> TokenSelection:
+    """Select tokens covered by any :class:`Span` with the given name.
+
+    Positions are unioned across every matching span on the sample.
+
+    Args:
+        sample: The sample to select from.
+        span_name: The span name to match.
+
+    Returns:
+        A :class:`TokenSelection` with positions sorted ascending.
+    """
     position_set: set[int] = set()
     for span in sample.spans:
         if span.name == span_name:

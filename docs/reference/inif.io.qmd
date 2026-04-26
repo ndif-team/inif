@@ -1,0 +1,20 @@
+---
+title: inif.io
+description: Save and load INIF documents — JSON dispatch and dict conversion.
+reference: inif.io
+---
+
+The plain-JSON IO surface. For the indexed archive format (random-access
+reads, streaming writes) see [`inif.indexed`](inif.indexed.qmd).
+
+## Saving and loading
+
+### save
+
+### load
+
+## Dict conversion
+
+### to_dict
+
+### from_dict

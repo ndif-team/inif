@@ -1,0 +1,18 @@
+---
+title: inif.schema
+description: JSON Schema export and validation for INIF documents.
+reference: inif.schema
+---
+
+Helpers that derive the JSON Schema from the Pydantic models and validate
+arbitrary dicts against it. The schema documents conventional Token extras
+(`logprob`, `logit_lens`) under `$defs.TokenExtras` for downstream
+validators.
+
+## Schema
+
+### get_schema
+
+### write_schema
+
+### validate

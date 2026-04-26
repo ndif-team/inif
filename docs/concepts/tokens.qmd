@@ -1,0 +1,121 @@
+---
+title: Tokens, Ids, and Extras
+description: How INIF represents individual tokens — vocab tokens, sequence refs, and the extras API for sparse per-token data.
+llms-description: Token model — id >= 0 vocab tokens, id == -1 sequence refs, and the get_extra/set_extra API for logprobs and interpretability outputs.
+---
+
+A `Token` is the atomic unit of an INIF sample. It carries three concrete
+fields plus a flexible "extras" bag for sparse per-token data such as
+logprobs or layer-wise activations.
+
+## Token shape
+
+``` python
+from inif import Token
+
+vocab_token = Token(id=464, token="The")
+ref_token   = Token(id=-1, sequence_id="seq_0")
+```
+
+- `id: int` — required. The discriminator: `id >= 0` is a real vocabulary
+  token id; `id == -1` is a sequence reference.
+- `token: str | None` — the decoded string. Required for vocab tokens;
+  always `None` for sequence refs.
+- `sequence_id: str | None` — the `Sequence.id` this ref points at.
+  Required for sequence refs; always `None` for vocab tokens. Serialized as
+  `"seq_id"` in JSON.
+
+The `@model_validator` enforces these invariants at construction time —
+mismatched combinations raise `ValidationError`.
+
+::: {.callout-tip appearance="minimal"}
+#### Why the sentinel
+
+INIF documents typically share large prefixes (system prompts, few-shot
+exemplars, MCQ scaffolding) across every sample. Stowing those once in
+`Sequence` and pointing at them with a single `id == -1` token keeps file
+sizes manageable without inventing a separate "ref" type. See
+[Sequences](sequences.qmd) for how the dedup pass produces these refs.
+:::
+
+## Sequence refs are pointers, not tokens
+
+A sequence ref *expands* to its constituent tokens. Two helpers do this:
+
+`Token.expanded_tokens(sequences)` — flatten one token. Returns a
+single-element list for vocab tokens, otherwise the sequence's tokens.
+
+`Sample.get_expanded_tokens(sequences)` — flatten a whole sample, building
+the sequence map once instead of per-token. This is the right call when you
+want the flat view for analysis.
+
+For random-access editing of a single position inside a ref, use
+`Sample.materialize_position(expanded_pos, sequences)`. It expands *only*
+the containing ref in place, leaves the other refs alone, and returns
+`(actual_index, real_token)` so you can write to it. This is the primitive
+that lets you attach interpretability outputs to specific positions when
+those positions are currently compressed inside a shared sequence.
+
+## Extras
+
+INIF tokens accept arbitrary extra fields via Pydantic's `extra="allow"`.
+The same data lives in two places — `__dict__` (so attribute access works)
+and `model_extra` (so serialization works) — so always use the helpers
+below, which keep both in sync:
+
+``` python
+from inif import Token
+
+tok = Token(id=10, token="Hello")
+tok.set_extra("logprob", -0.3)        # write
+tok.get_extra("logprob")              # read, returns -0.3
+tok.has_extra("logprob")              # True
+tok.pop_extra("logprob")              # remove and return
+tok.extras                            # snapshot dict of all extras
+```
+
+::: {.callout-warning appearance="minimal"}
+#### Don't bypass the helpers
+
+Setting `tok.logprob = 0.1` puts the value in `__dict__` only — it won't
+serialize. Setting `tok.model_extra["logprob"] = 0.1` puts it in the
+serialization bag only — attribute access reads stale data. The helpers
+are the only safe interface.
+:::
+
+## Conventional extra names
+
+The schema documents these names under `$defs.TokenExtras` (in
+[`inif.schema`](../reference/inif.schema.qmd)) so external validators and
+viewers know what to expect:
+
+| Name | Type | Meaning |
+|---|---|---|
+| `logprob` | `float` | Per-token log-probability from the model. Auto-attached by the Inspect converter when the eval log includes choice logprobs. |
+| `logit_lens` | `dict` | Per-layer logit-lens output keyed by layer name. Set by interpretability tooling. |
+
+You can store anything else under any name — probes, attention weights,
+gradient norms — these are just the conventionally-named fields the viewer
+recognises out of the box.
+
+## Why extras block deduplication
+
+[Sequence deduplication](sequences.qmd) skips any token that has extras
+attached. The reason is that extras are *position-specific* (the logprob at
+position 17 is not the same as at position 42 even if the token string is
+identical), so collapsing two such positions into a single shared `Sequence`
+would silently destroy information. The dedup pass therefore treats any
+extras-carrying token as a barrier.
+
+The same is true for tokens covered by an [annotation](annotations.qmd).
+
+## Serialization gotchas
+
+- The serialization alias for `sequence_id` is `seq_id` — that's what
+  appears in JSON. Both names are accepted on load.
+- Field order in JSON is `token` (or `seq_id`) first, then `id` last, so
+  rendered token dicts read naturally as `{"token": "...", "id": N}` or
+  `{"seq_id": "...", "id": -1}`.
+- The custom JSON pretty-printer in [`save`](../workflows/io.qmd) renders
+  extras-free token dicts on a single line; tokens with extras render
+  multi-line like any other dict.

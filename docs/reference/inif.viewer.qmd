@@ -1,0 +1,17 @@
+---
+title: inif.viewer
+description: Render an InifDocument as a self-contained interactive HTML page.
+reference: inif.viewer
+---
+
+Three flavours of the same renderer: get the HTML string, write it to
+disk, or display inline in Jupyter. See [HTML viewer](../workflows/viewer.qmd)
+for what the rendered page looks like and the available options.
+
+## Rendering
+
+### render_html
+
+### save_html
+
+### show

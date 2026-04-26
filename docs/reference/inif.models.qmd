@@ -1,0 +1,42 @@
+---
+title: inif.models
+description: Core Pydantic models — InifDocument, Sample, Token, Sequence, and friends.
+reference: inif.models
+---
+
+The classes here define the on-disk shape of an INIF document. They are
+re-exported from the top-level `inif` package, so most code does
+`from inif import Sample, Token, ...` rather than reaching into this
+module directly.
+
+## Documents
+
+### InifDocument
+
+## Samples
+
+### Sample
+
+### SampleScore
+
+## Tokens
+
+### Token
+
+### Sequence
+
+### TokenExtras
+
+## Annotations and spans
+
+### TokenAnnotation
+
+### Span
+
+## Metadata
+
+### Metadata
+
+### ModelInfo
+
+### SourceEval

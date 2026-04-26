@@ -26,3 +26,5 @@ examples/*.html
 examples/*.inif
 examples/*.json.gz
 examples/*_shards/
+/.quarto/
+**/*.quarto_ipynb

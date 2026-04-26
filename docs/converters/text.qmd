@@ -1,0 +1,133 @@
+---
+title: Text Converter
+description: Build an INIF document from raw text strings or from text files on disk.
+llms-description: from_texts tokenizes strings or chat message lists with a HuggingFace tokenizer; from_text_files wraps it for one-file-per-sample workloads.
+---
+
+The text converter is the fastest path from "I have some strings" to "I
+have an `InifDocument`". It handles both plain strings and chat-style
+message lists.
+
+``` python
+from inif.converters.text import from_texts, from_text_files
+```
+
+## `from_texts`
+
+``` python
+from inif.converters.text import from_texts
+
+doc = from_texts(
+    texts=[
+        "The capital of France is Paris.",
+        "The capital of Italy is Rome.",
+    ],
+    tokenizer="gpt2",
+)
+```
+
+| Arg | Type | Default |
+|---|---|---|
+| `texts` | `list[str]` or `list[list[dict]]` | required |
+| `tokenizer` | tokenizer instance or model id string | required |
+| `sample_ids` | `list[str] \| None` | `None` (auto: `"sample_0"`, …) |
+| `min_sequence_length` | `int` | `3` |
+| `deduplicate` | `bool` | `True` |
+| `tag_chat_roles` | `bool` | `False` |
+
+Each element of `texts` is detected per-element:
+
+- If it's a `list[dict]` with `{"role", "content"}` keys, it's tokenized
+  via `tokenizer.apply_chat_template` (with `add_generation_prompt=False`)
+  and produces one `Sample` whose `texts` list is the per-message contents.
+- Otherwise it's treated as a plain string, tokenized via
+  `tokenizer.encode(...)`, and produces one `Sample` whose `texts` list
+  contains the original string.
+
+### Mixing chat and plain text
+
+``` python
+doc = from_texts(
+    texts=[
+        "raw string sample",
+        [{"role": "user", "content": "..."},
+         {"role": "assistant", "content": "..."}],
+    ],
+    tokenizer="meta-llama/Llama-3.2-1B-Instruct",
+    tag_chat_roles=True,
+)
+```
+
+`tag_chat_roles=True` annotates the chat samples with
+`system` / `user` / `assistant` / `template` ranges (see
+[Tagging](../workflows/tagging.qmd)). It is a no-op for the plain-string
+samples in the same call.
+
+### Sequence deduplication
+
+Runs by default. Common token runs across *all* samples are collapsed into
+shared [`Sequence`](../concepts/sequences.qmd) objects. Pass
+`deduplicate=False` to keep the document flat:
+
+``` python
+doc = from_texts(texts, tokenizer="gpt2", deduplicate=False)
+```
+
+`min_sequence_length` controls the minimum n-gram length the dedup pass
+will collapse — see [the sequences page](../concepts/sequences.qmd#tuning-min-length)
+for tuning guidance.
+
+## `from_text_files`
+
+When each input is a file on disk:
+
+``` python
+from inif.converters.text import from_text_files
+from pathlib import Path
+
+doc = from_text_files(
+    paths=list(Path("corpus/").glob("*.txt")),
+    tokenizer="gpt2",
+)
+```
+
+| Arg | Type | Default |
+|---|---|---|
+| `paths` | `list[str \| Path]` | required |
+| `tokenizer` | tokenizer instance or model id string | required |
+| `min_sequence_length` | `int` | `3` |
+| `deduplicate` | `bool` | `True` |
+
+Each file becomes one `Sample`; the sample id defaults to `path.name`.
+File contents are read as UTF-8. The `paths` are also recorded on
+`metadata.sources` so the document remembers where it came from.
+
+## Tokenizer
+
+`tokenizer` accepts either a HuggingFace tokenizer instance or a model id
+string. Strings are loaded via `AutoTokenizer.from_pretrained` (no
+`trust_remote_code` for the text converter — that is reserved for the
+auto-resolved path used by the eval converters).
+
+The detected `tokenizer.name_or_path` and `tokenizer._commit_hash` are
+recorded as `metadata.model.name` / `metadata.model.revision`.
+
+## What ends up in the document
+
+| Sample field | Source |
+|---|---|
+| `id` | `sample_ids[i]` if provided, else `f"sample_{i}"` (or filename for `from_text_files`). |
+| `tokens` | Tokenizer output; `apply_chat_template` for chat inputs, `encode` for plain. |
+| `texts` | Per-message contents for chat inputs; the original string for plain inputs. |
+| Other fields | Empty / default. |
+
+| Document field | Source |
+|---|---|
+| `metadata.model` | From the tokenizer (`name_or_path`, `_commit_hash`). |
+| `metadata.packages` | `inif`, `transformers` versions. |
+| `metadata.sources` | Set by `from_text_files`; empty for `from_texts`. |
+| `metadata.created_at` | UTC `datetime.now()`. |
+| `sequences` | Populated by dedup pass when `deduplicate=True`. |
+
+For a complete end-to-end walkthrough, see the
+[Quickstart](../using/quickstart.qmd).

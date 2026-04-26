@@ -54,6 +54,13 @@ def tag_by_regexes(
 
 
 def tag_by_regex_all(doc: InifDocument, pattern: str, tag: str) -> None:
+    """Apply a single regex tagger across every sample in ``doc``.
+
+    Args:
+        doc: The document whose samples to tag.
+        pattern: Regex pattern matched against each token's string.
+        tag: Annotation name to add to matching positions.
+    """
     tag_by_regexes_all(doc, [(pattern, tag)])
 
 
@@ -142,6 +149,14 @@ def tag_by_text_regex_all(
 def tag_by_predicate(
     sample: Sample, predicate: Callable[[Token], bool], tag: str
 ) -> None:
+    """Tag every token for which ``predicate(token)`` returns ``True``.
+
+    Args:
+        sample: The sample to tag.
+        predicate: Callable receiving the :class:`Token` (not just the
+            string), returning a truthy value for matches.
+        tag: Annotation name to add.
+    """
     tag_by_predicates(sample, [(predicate, tag)])
 
 
@@ -164,19 +179,57 @@ def tag_by_predicates_all(
 
 
 def tag_positions(sample: Sample, positions: list[int], tag: str) -> None:
+    """Add an annotation covering exactly the given positions.
+
+    Adjacent positions are coalesced into ranges by
+    :meth:`Sample.annotate_positions`.
+
+    Args:
+        sample: The sample to tag.
+        positions: Sample-local token positions to annotate.
+        tag: Annotation name to add.
+    """
     sample.annotate_positions(tag, positions)
 
 
 def remove_tag(sample: Sample, tag: str) -> None:
+    """Drop every annotation with the given name from ``sample``.
+
+    Annotations that share the name but differ only in metadata are also
+    removed — the helper does not preserve metadata-distinguished duplicates.
+
+    Args:
+        sample: The sample to modify.
+        tag: Annotation name to drop.
+    """
     sample.remove_annotation(tag)
 
 
 def remove_tag_all(doc: InifDocument, tag: str) -> None:
+    """Drop every annotation with the given name from every sample in ``doc``.
+
+    Args:
+        doc: The document whose samples to modify.
+        tag: Annotation name to drop.
+    """
     for sample in doc.samples:
         remove_tag(sample, tag)
 
 
 def create_span_from_tag(sample: Sample, tag: str, span_name: str) -> Span:
+    """Convert an annotation into a :class:`Span` on the same sample.
+
+    The new span carries the original tag in its ``tags`` list and the
+    flattened position list across every range with that name.
+
+    Args:
+        sample: The sample to add the span to.
+        tag: Annotation name to convert.
+        span_name: Name to give the resulting span.
+
+    Returns:
+        The newly created :class:`Span`, also appended to ``sample.spans``.
+    """
     positions = sample.annotation_positions(tag)
     span = Span(name=span_name, positions=positions, tags=[tag])
     sample.spans.append(span)
@@ -286,7 +339,18 @@ def tag_chat_roles_doc(
         tag_chat_roles(sample, messages, tokenizer, doc.sequences or None)
 
 
-def tag_special_tokens(sample: Sample, tokenizer, tag: str = "special") -> None:
+def tag_special_tokens(sample: Sample, tokenizer: Any, tag: str = "special") -> None:
+    """Tag every special token (BOS, EOS, etc.) in ``sample``.
+
+    Special token ids are read from the tokenizer's ``all_special_ids``
+    attribute (any tokenizer without that attribute results in no tags).
+    Sequence-ref tokens are skipped.
+
+    Args:
+        sample: The sample to tag.
+        tokenizer: A HuggingFace tokenizer exposing ``all_special_ids``.
+        tag: Annotation name to add. Defaults to ``"special"``.
+    """
     special_ids = set()
     if hasattr(tokenizer, "all_special_ids"):
         special_ids = set(tokenizer.all_special_ids)

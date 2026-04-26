@@ -1,0 +1,63 @@
+---
+title: Converters
+description: Building INIF documents from raw text and from eval-framework outputs.
+llms-description: INIF ships converters for raw text, Inspect AI eval logs, and every_eval_ever instance records; all share a common tokenizer-resolution rule.
+---
+
+INIF is a sink for tokenized generation traces. The converters in
+[`inif.converters`](../reference/inif.converters.text.qmd) translate from
+the format produced by your generation pipeline into an
+[`InifDocument`](../concepts/format.qmd).
+
+| Source | Module | Entry point |
+|---|---|---|
+| [Raw text / chat messages](text.qmd) | `inif.converters.text` | `from_texts`, `from_text_files` |
+| [Inspect AI eval logs](inspect_ai.qmd) | `inif.converters.inspect_ai` | `from_eval_log`, `from_eval_file` |
+| [every_eval_ever records](evaleval.qmd) | `inif.converters.evaleval` | `from_instance_records`, `from_eval_json`, `from_hf_dataset` |
+
+All of them follow the same conventions:
+
+- **Tokenization is mandatory.** Every Sample carries a `tokens` list.
+  There is no opt-out — see [Tokenizer resolution](tokenizers.qmd) for
+  how the tokenizer is chosen.
+- **Sequence deduplication runs by default.** Pass `deduplicate=False` to
+  skip it.
+- **Chat role tagging is on by default** for the eval converters
+  (`tag_chat_roles=True`). The text converter has it off by default
+  (chat inputs are detected per element and tagged when present, but the
+  default text input is plain string).
+
+## Picking the right converter
+
+- You have raw strings or chat messages produced by something other than an
+  eval framework — use the [text converter](text.qmd).
+- You have Inspect AI `.eval` log files — use the
+  [Inspect AI converter](inspect_ai.qmd). Per-token logprobs and
+  generated-output annotations are attached automatically when present.
+- You have evaleval JSON / JSONL or want to pull straight from the
+  [`evaleval/EEE_datastore`](https://huggingface.co/datasets/evaleval/EEE_datastore)
+  HF dataset — use the [evaleval converter](evaleval.qmd). Reasoning-trace
+  spans, multi-turn / agentic interactions, tool calls, and aggregate
+  metric metadata are preserved.
+
+## Common pitfalls
+
+::: {.callout-warning appearance="minimal"}
+#### Closed-source model ids
+
+Auto-loading the tokenizer from `eval_log.eval.model` fails for closed
+models (`openai/gpt-4`, `anthropic/claude-3-...`) because there is no HF
+tokenizer to fetch. Pass `tokenizer="<hf-stand-in>"` explicitly. The
+warning that gets emitted on mismatch is informational — token-level data
+will reflect the supplied tokenizer, not the original model.
+:::
+
+::: {.callout-warning appearance="minimal"}
+#### Tokenizers that are lossy on per-token decode
+
+A few tokenizers (notably old SentencePiece slow tokenizers, and Qwen,
+which replaces U+2028 with U+FFFD) cannot reliably reconstruct per-token
+strings. The converters silently skip role / generated / reasoning
+tagging for those samples rather than raise. The tokens themselves are
+still correct.
+:::

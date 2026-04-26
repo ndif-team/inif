@@ -1,0 +1,27 @@
+---
+title: inif.selectors
+description: Pick token positions and sample subsets out of a document.
+reference: inif.selectors
+---
+
+Pure functions that return a `TokenSelection` (or `list[Sample]`) without
+mutating the input. See [Selecting tokens and samples](../concepts/selection.qmd)
+for the narrative overview.
+
+## Selection container
+
+### TokenSelection
+
+## Token selectors
+
+### select_by_position
+
+### select_by_annotation
+
+### select_by_sequence_id
+
+### select_by_span
+
+## Sample selectors
+
+### filter_samples_by_score

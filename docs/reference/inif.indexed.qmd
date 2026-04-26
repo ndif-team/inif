@@ -1,0 +1,33 @@
+---
+title: inif.indexed
+description: Indexed archive format — incremental writes, header-only reads, random sample access.
+reference: inif.indexed
+---
+
+The single-file indexed archive (`.inif`) stores metadata and sequences
+once, then writes each sample as a separate compressed member. Readers can
+load the header, summaries, one sample, or all samples without inflating
+the entire document up front.
+
+See [Saving and loading](../workflows/io.qmd#indexed-archive) for the
+narrative overview.
+
+## Writer
+
+### IndexedInifWriter
+
+### save_indexed
+
+## Readers
+
+### load_indexed
+
+### read_indexed_header
+
+### read_indexed_sample_summaries
+
+### read_indexed_sample
+
+### read_indexed_samples
+
+### iter_indexed_samples

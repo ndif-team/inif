@@ -1,0 +1,131 @@
+---
+title: Sequences and Deduplication
+description: How INIF detects and shares token runs that repeat across every sample.
+llms-description: Sequence deduplication finds n-grams common to all samples via set-intersection and replaces them with refs; expansion round-trips back to flat tokens.
+---
+
+A document built from a typical eval has heavy repetition — the same system
+prompt, few-shot exemplars, MCQ scaffolding, or chat template delimiters
+appear at the start of every sample. INIF detects those shared runs and
+stores them once.
+
+The two operations are symmetric:
+
+``` python
+from inif import deduplicate_sequences, expand_sequences
+
+compact = deduplicate_sequences(doc, min_length=3)
+flat    = expand_sequences(compact)
+```
+
+Both return *new* documents — neither mutates the input. Tokens, sequences,
+metadata, and extras are deep-copied on the way out.
+
+## What gets deduplicated
+
+A token run is eligible for collapse only if it appears as a contiguous
+subsequence in **every** sample (set-intersection, not pairwise). The dedup
+pass also skips:
+
+- Tokens already inside a sequence ref (refs are never re-wrapped).
+- Tokens with [extras](tokens.qmd#extras) attached — extras are
+  position-specific, so collapsing them would destroy data.
+- Tokens covered by any [annotation](annotations.qmd) — keeps tagged regions
+  visible as real tokens for downstream analysis.
+
+Both the token strings *and* their ids must match for a window to be
+collapsed. This guards against the rare case where two samples share a
+substring but tokenize it to different ids.
+
+## What gets stored
+
+A collapsed run becomes a `Sequence`:
+
+``` text
+Sequence(
+    id="seq_0",
+    n_tokens=14,
+    tokens=[Token(id=..., token=...) for _ in range(14)],
+)
+```
+
+Each sample's matching window is replaced by a single sequence-ref token:
+
+``` text
+Token(id=-1, sequence_id="seq_0")
+```
+
+`Sequence.id` is auto-assigned as `seq_0`, `seq_1`, …, skipping ids already
+present in `doc.sequences` so re-running dedup never collides.
+
+The captured `Sequence.tokens` list keeps the *real* vocabulary ids, not
+just the strings. That is what makes the dedup → expand round-trip lossless
+for downstream tools that need ids (probing, logit-lens, anything that
+indexes into the model's vocab matrix).
+
+## Tuning `min_length`
+
+`min_length` (default `3`) is both the smallest window the algorithm will
+collapse *and* the n-gram size used for the initial intersection. Smaller
+values find more matches at higher computational cost and produce noisier
+sequence lists; larger values miss small shared runs.
+
+Picking `min_length` is mostly an empirical call:
+
+- For chat-template-heavy eval documents, the default `3` finds delimiter
+  bigrams plus longer prompt prefixes — usually the right balance.
+- For raw text without chat formatting, raising `min_length` to `5`–`8`
+  avoids collapsing common bigrams that aren't really "shared structure"
+  worth deduplicating.
+
+## Expansion
+
+`expand_sequences(doc)` rebuilds a flat document. Each ref token is
+replaced by fresh `Token(id=t.id, token=t.token)` instances drawn from the
+referenced sequence. The returned document drops the sequence list entirely
+— running `deduplicate_sequences` again will rediscover the same shared
+runs.
+
+Annotations are remapped along with the tokens: a range `[start, end)`
+spanning a ref token in the compact view becomes the wider range covering
+all of the ref's expanded positions. Round-tripping through dedup → expand
+preserves the labelled regions exactly.
+
+## Materializing one position
+
+Expansion is a whole-document operation. When you only need to write to a
+single position currently inside a ref — for example, attaching a probe
+score to position 137 — use `Sample.materialize_position`:
+
+``` python
+actual_index, real_token = sample.materialize_position(137, doc.sequences)
+real_token.set_extra("probe_score", 0.42)
+```
+
+The containing ref is expanded in place, leaving the rest of the sample's
+refs untouched. The returned `(actual_index, real_token)` pair is the
+position you can now address directly.
+
+## Performance
+
+Both passes are O(total tokens) in practice. The detection algorithm:
+
+1. Indexes only length-`min_length` n-grams per sample (O(n) memory).
+2. Intersects keys across samples to find candidate anchors.
+3. Greedily extends each candidate rightward, dropping samples whose next
+   token mismatches.
+
+The replacement pass is also linear: sequences are indexed by their
+`(first_token, first_id)` pair so the common case (no match at this
+position) is O(1). The hot loop never re-walks the full sequence list.
+
+## When not to deduplicate
+
+The Inspect AI / evaleval / text converters all run dedup by default. Pass
+`deduplicate=False` (or `--no-dedup` on the CLI) when:
+
+- You're producing a single-sample document — there is nothing to share.
+- You're going to attach interpretability outputs at every position
+  immediately afterwards — extras-carrying tokens are skipped by the next
+  dedup run anyway, so the savings collapse to zero.
+- You're benchmarking and want the un-collapsed file size as a baseline.
