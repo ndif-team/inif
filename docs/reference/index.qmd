@@ -10,9 +10,9 @@ title: Reference
 | [inif.converters.inspect_ai](inif.converters.inspect_ai.qmd) | Convert Inspect AI EvalLog objects and .eval files into INIF documents. |
 | [inif.converters.text](inif.converters.text.qmd) | Build INIF documents from raw text strings or text files on disk. |
 | [inif.flat](inif.flat.qmd) | Flat parallel-array view of an InifDocument for high-throughput scans. |
-| [inif.indexed](inif.indexed.qmd) | Indexed archive format — incremental writes, header-only reads, random sample access. |
-| [inif.io](inif.io.qmd) | Save and load INIF documents — JSON dispatch and dict conversion. |
-| [inif.models](inif.models.qmd) | Core Pydantic models — InifDocument, Sample, Token, Sequence, and friends. |
+| [inif.indexed](inif.indexed.qmd) | Indexed archive format — incremental writes, lower-level save/load, partial sample selection. |
+| [inif.io](inif.io.qmd) | Save and load INIF documents — suffix-based dispatch plus the unified read API for both .inif and .inif.json. |
+| [inif.models](inif.models.qmd) | Core Pydantic models — InifDocument, Sample, TokenOrSeqRef, Sequence, Text, and friends. |
 | [inif.schema](inif.schema.qmd) | JSON Schema export and validation for INIF documents. |
 | [inif.selectors](inif.selectors.qmd) | Pick token positions and sample subsets out of a document. |
 | [inif.sequences](inif.sequences.qmd) | Find shared token runs across samples and replace them with sequence references. |

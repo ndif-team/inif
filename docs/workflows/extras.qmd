@@ -1,12 +1,12 @@
 ---
 title: Storing Interpretability Outputs
-description: Attaching per-token interpretability data — logprobs, logit-lens, probe scores — via the Token extras API.
-llms-description: Use Token.set_extra/get_extra to attach sparse per-token data; conventional names are logprob and logit_lens; extras block sequence dedup.
+description: Attaching per-token interpretability data — logprobs, logit-lens, probe scores — via the TokenOrSeqRef extras API.
+llms-description: Use TokenOrSeqRef.set_extra/get_extra to attach sparse per-token data; conventional names are logprob and logit_lens; extras block sequence dedup.
 ---
 
 INIF is designed to store the *outputs* of interpretability experiments
-alongside the tokens they describe. The mechanism is the Token
-[extras](../concepts/tokens.qmd#extras) API — a flexible per-token bag
+alongside the tokens they describe. The mechanism is the
+[`TokenOrSeqRef` extras](../concepts/tokens.qmd#extras) API — a flexible per-token bag
 that survives serialization and is recognised by the HTML viewer.
 
 This page collects the recipes that come up when wiring an interpretability
@@ -121,7 +121,7 @@ adds up. Two strategies:
 2. **Use [`FlatTokenStore`](../reference/inif.flat.qmd) for the scan, then
    write back through `materialize_position`**. The flat store gives
    bulk-array semantics for *finding* positions; the writes themselves
-   still go through the regular Token API.
+   still go through the regular `TokenOrSeqRef` API.
 
 ``` python
 from inif.flat import FlatTokenStore
@@ -139,7 +139,7 @@ for sample_id, local_pos in (
 
 ## Reading extras back
 
-`Token.extras` returns a snapshot dict of all extras on the token —
+`TokenOrSeqRef.extras` returns a snapshot dict of all extras on the token —
 convenient for inspection and serialization-aware comparisons. Per-key
 reads use `get_extra` / `has_extra`:
 

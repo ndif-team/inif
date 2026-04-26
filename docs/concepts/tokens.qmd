@@ -1,40 +1,45 @@
 ---
-title: Tokens, Ids, and Extras
-description: How INIF represents individual tokens — vocab tokens, sequence refs, and the extras API for sparse per-token data.
-llms-description: Token model — id >= 0 vocab tokens, id == -1 sequence refs, and the get_extra/set_extra API for logprobs and interpretability outputs.
+title: Tokens, Texts, and Extras
+description: How INIF represents individual tokens, named text segments, and the extras API for sparse per-token data.
+llms-description: TokenOrSeqRef carries vocab tokens (id is int) and sequence refs (id is None, token holds the seq id); Text wraps named text segments; get_extra/set_extra hold per-token logprobs and interpretability outputs.
 ---
 
-A `Token` is the atomic unit of an INIF sample. It carries three concrete
-fields plus a flexible "extras" bag for sparse per-token data such as
-logprobs or layer-wise activations.
+A `TokenOrSeqRef` is the atomic unit of an INIF sample — a single Pydantic
+class that covers both vocabulary tokens and sequence references. It carries
+two concrete fields plus a flexible "extras" bag for sparse per-token data
+such as logprobs or layer-wise activations.
 
-## Token shape
+## TokenOrSeqRef shape
 
 ``` python
-from inif import Token
+from inif import TokenOrSeqRef
 
-vocab_token = Token(id=464, token="The")
-ref_token   = Token(id=-1, sequence_id="seq_0")
+vocab_token = TokenOrSeqRef(id=464, token="The")
+ref_token   = TokenOrSeqRef(id=None, token="seq_0")
 ```
 
-- `id: int` — required. The discriminator: `id >= 0` is a real vocabulary
-  token id; `id == -1` is a sequence reference.
-- `token: str | None` — the decoded string. Required for vocab tokens;
-  always `None` for sequence refs.
-- `sequence_id: str | None` — the `Sequence.id` this ref points at.
-  Required for sequence refs; always `None` for vocab tokens. Serialized as
-  `"seq_id"` in JSON.
+- `token: str` — required. For vocab tokens, the decoded string. For
+  sequence refs, the target `Sequence.id` (a string).
+- `id: int | None` — optional. `int >= 0` marks a vocabulary token (the
+  model's vocab id). `None` marks a sequence reference. **The presence /
+  absence of `id` is the discriminator** — there is no separate
+  `sequence_id` field.
 
-The `@model_validator` enforces these invariants at construction time —
-mismatched combinations raise `ValidationError`.
+The `is_sequence_ref` property is the cheap discriminator check
+(`return self.id is None`), and the read-only `sequence_id` property
+returns `self.token` for refs and `None` for vocab tokens — handy when you
+want to write `if tok.sequence_id == "seq_0"` without remembering the
+underlying invariant.
 
 ::: {.callout-tip appearance="minimal"}
-#### Why the sentinel
+#### Why one class
 
 INIF documents typically share large prefixes (system prompts, few-shot
 exemplars, MCQ scaffolding) across every sample. Stowing those once in
-`Sequence` and pointing at them with a single `id == -1` token keeps file
-sizes manageable without inventing a separate "ref" type. See
+`Sequence` and pointing at them from samples keeps file sizes manageable.
+A single class for both vocab tokens and refs avoids two parallel hierarchies
+and makes the JSON shape ergonomic: refs serialize as `{"token": "seq_0"}`
+in compact mode (`id` is `None` and stripped as a default). See
 [Sequences](sequences.qmd) for how the dedup pass produces these refs.
 :::
 
@@ -42,7 +47,7 @@ sizes manageable without inventing a separate "ref" type. See
 
 A sequence ref *expands* to its constituent tokens. Two helpers do this:
 
-`Token.expanded_tokens(sequences)` — flatten one token. Returns a
+`TokenOrSeqRef.expanded_tokens(sequences)` — flatten one entry. Returns a
 single-element list for vocab tokens, otherwise the sequence's tokens.
 
 `Sample.get_expanded_tokens(sequences)` — flatten a whole sample, building
@@ -56,6 +61,30 @@ the containing ref in place, leaves the other refs alone, and returns
 that lets you attach interpretability outputs to specific positions when
 those positions are currently compressed inside a shared sequence.
 
+## Text segments
+
+`Sample.texts` is a list of `Text` objects (not raw strings). Each `Text`
+has three fields:
+
+``` python
+from inif import Text
+
+Text(name="user_0", value="What is 2+2?")
+Text(name="assistant_0", value="The answer is 4.", metadata={"turn_idx": 0})
+```
+
+- `name: str` — a per-segment label.
+- `value: str` — the segment content.
+- `metadata: dict` — free-form caller-supplied context (e.g. turn index,
+  tool-call payload).
+
+The default naming scheme is **role-based** for chat inputs (`"system_0"`,
+`"user_0"`, `"assistant_0"`, `"user_1"`, …, system prompt always included)
+and **index-based** for plain-text inputs (`"text_0"`, `"text_1"`, …). The
+[converters](../converters/index.qmd) emit `Text` objects with these
+defaults; the `name_messages` helper in `inif.converters._tokenize` is the
+shared implementation.
+
 ## Extras
 
 INIF tokens accept arbitrary extra fields via Pydantic's `extra="allow"`.
@@ -64,9 +93,9 @@ and `model_extra` (so serialization works) — so always use the helpers
 below, which keep both in sync:
 
 ``` python
-from inif import Token
+from inif import TokenOrSeqRef
 
-tok = Token(id=10, token="Hello")
+tok = TokenOrSeqRef(id=10, token="Hello")
 tok.set_extra("logprob", -0.3)        # write
 tok.get_extra("logprob")              # read, returns -0.3
 tok.has_extra("logprob")              # True
@@ -111,11 +140,13 @@ The same is true for tokens covered by an [annotation](annotations.qmd).
 
 ## Serialization gotchas
 
-- The serialization alias for `sequence_id` is `seq_id` — that's what
-  appears in JSON. Both names are accepted on load.
-- Field order in JSON is `token` (or `seq_id`) first, then `id` last, so
-  rendered token dicts read naturally as `{"token": "...", "id": N}` or
-  `{"seq_id": "...", "id": -1}`.
+- Field declaration order is `token` first, then `id`, so rendered dicts
+  read naturally as `{"token": "...", "id": N}` for vocab tokens and
+  `{"token": "seq_0"}` for sequence refs (with compact mode the default
+  `id is None` is stripped).
 - The custom JSON pretty-printer in [`save`](../workflows/io.qmd) renders
   extras-free token dicts on a single line; tokens with extras render
   multi-line like any other dict.
+- The earlier `sequence_id` field (and its `seq_id` JSON alias) is gone.
+  Documents from before that change need to be re-saved through `load` /
+  `save` to migrate to the new shape.

@@ -25,11 +25,11 @@ Annotations live on `Sample.annotations` as
 positions 0 through 4.
 
 ``` python
-from inif import Sample, Token, TokenAnnotation
+from inif import Sample, TokenAnnotation, TokenOrSeqRef
 
 sample = Sample(
     id="0",
-    tokens=[Token(id=i, token=f"t{i}") for i in range(10)],
+    tokens=[TokenOrSeqRef(id=i, token=f"t{i}") for i in range(10)],
     annotations=[
         TokenAnnotation(name="generated", ranges=[(5, 10)]),
         TokenAnnotation(name="user", ranges=[(0, 5)]),

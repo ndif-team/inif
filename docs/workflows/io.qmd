@@ -1,7 +1,7 @@
 ---
 title: Saving and Loading
-description: How to save and load INIF documents — the .inif.json plain format and the .inif indexed archive.
-llms-description: Use save/load with .inif.json for plain JSON, .inif for the indexed archive (random access, header reads, streaming writes).
+description: How to save and load INIF documents — the .inif.json plain format and the .inif indexed archive — and the unified read API that works on both.
+llms-description: Use save/load with .inif.json or .inif (auto-dispatch by suffix); use iter_samples / read_samples / read_info for format-agnostic reads (random access, header reads, streaming).
 ---
 
 INIF supports two on-disk formats. Both produce the *same* `InifDocument`
@@ -27,8 +27,9 @@ doc = load("traces.inif.json")
 ```
 
 By default `save` produces a *compact* dump: `None` values and
-default-valued fields are stripped, `Token.sequence_id` is emitted under its
-`"seq_id"` alias. Pass `compact=False` to keep every field:
+default-valued fields are stripped. Sequence-ref tokens (`id is None`)
+serialize down to a single-key `{"token": "<seq_id>"}` dict. Pass
+`compact=False` to keep every field:
 
 ``` python
 save(doc, "traces.inif.json", compact=False)   # full dump
@@ -66,7 +67,7 @@ _journal/              — incremental-write journal (see below)
 Readers can open the archive, parse the small manifest, and either:
 
 - Inflate the entire document.
-- Read just the metadata + sequences (header-only).
+- Read just the metadata + per-sample summaries (header-only).
 - Read one or more samples by id without touching the rest.
 - Stream samples in manifest order.
 
@@ -79,66 +80,85 @@ save(doc, "traces.inif")              # writes the indexed archive
 doc = load("traces.inif")             # full load
 ```
 
-### Header-only reads
+`save` and `load` dispatch based on suffix — passing `"traces.inif"` calls
+the indexed-archive writer/reader internally. `save_indexed` and
+`load_indexed` are the lower-level entry points exposed by `inif.indexed`
+for advanced options like `compression=`, `max_preview_chars=`, or
+partial loads via `sample_ids=`.
+
+## Unified read API
+
+Three top-level functions in `inif.io` work on **both** `.inif` and
+`.inif.json` files — call them with whichever format your data happens to
+be in, and the dispatcher does the rest. For `.inif`, they hit the indexed
+archive (random access, header-only reads). For `.inif.json`, they fall
+back to a full `load` and operate over the in-memory document.
+
+### Header-only reads with `read_info`
 
 When you only need to know what a file contains — model id, eval source,
 sample summaries — you don't have to inflate the samples:
 
 ``` python
-from inif import read_indexed_header, read_indexed_sample_summaries
+from inif import read_info
 
-header = read_indexed_header("traces.inif")
-print(header.metadata.model.name)
-print(len(header.sequences))
-
-summaries = read_indexed_sample_summaries("traces.inif")
-for s in summaries:
+info = read_info("traces.inif")             # works on .inif and .inif.json
+print(info.metadata.model.name)
+for s in info.samples:
     print(s["id"], s["n_tokens"], s["scores"])
 ```
 
-Each summary carries `id`, `n_tokens`, `n_texts`, `n_spans`, score values,
-a truncated `text_preview`, plus optional `target` / `error` /
-`input_tokens` / `output_tokens` when present.
+`read_info` returns a `DocumentInfo`: `metadata` plus a list of summary
+dicts. Each summary carries `id`, `n_tokens`, `n_texts`, `n_spans`, score
+values, a truncated `text_preview`, plus optional `target` / `error` /
+`input_tokens` / `output_tokens` when present. **Sequences are not
+included** — that is the whole point of the cheap header read.
 
-### Random access by sample id
+### Random access with `read_samples`
 
 ``` python
-from inif import read_indexed_sample, read_indexed_samples
+from inif import read_samples
 
-one  = read_indexed_sample("traces.inif", "sample_42")
-many = read_indexed_samples("traces.inif", ["sample_1", "sample_7"])
+one  = read_samples("traces.inif", "sample_42")            # single id
+many = read_samples("traces.inif.json", ["sample_1", "sample_7"])
 ```
 
-`read_indexed_samples` also pre-validates that the requested ids are unique
-and present, raising `KeyError` for any miss.
+A bare string / int id is wrapped in a list automatically; the return type
+is always a `list[Sample]` in the order requested. Duplicate ids in the
+request list are rejected; missing ids raise `KeyError`.
 
-### Streaming iteration
+### Streaming with `iter_samples`
 
 For a memory-bounded scan over every sample:
 
 ``` python
-from inif import iter_indexed_samples
+from inif import iter_samples
 
-for sample in iter_indexed_samples("traces.inif"):
+for sample in iter_samples("traces.inif"):
     process(sample)
 ```
 
-The archive stays open for the duration of the iterator; samples are
-inflated lazily.
+For `.inif`, the archive stays open for the duration of the iterator and
+samples are inflated lazily. For `.inif.json`, the full document is parsed
+once and its samples are then yielded — same iteration shape, the
+trade-off is just where the parsing happens.
 
-### Partial / sub-document loads
+### Partial loads via `load_indexed`
 
-`load_indexed` accepts an optional `sample_ids` list to inflate only the
-selected samples and prune the sequence list to those actually referenced:
+When you need a self-contained `InifDocument` (with its sequence list
+pruned to what's referenced) for only a subset of samples, reach for
+`inif.indexed.load_indexed`:
 
 ``` python
-from inif import load_indexed
+from inif.indexed import load_indexed
 
 doc = load_indexed("traces.inif", sample_ids=["sample_1", "sample_7"])
 ```
 
-The returned document is self-contained — sequences not referenced by the
-kept samples are dropped.
+`load_indexed` is `.inif`-only — `.inif.json` doesn't have a header to
+inspect separately, so use `read_samples` followed by your own
+sub-document construction (`InifDocument(metadata=..., samples=...,
+sequences=...)`) if you really need that on JSON.
 
 ### Incremental writes
 
@@ -171,6 +191,12 @@ The following options used to exist and are now removed; the assertions in
 - `compress=True/False` overrides on `save` / `load`.
 - The `.gz` suffix for gzipped JSON files (`.inif.json.gz`).
 - The `.inifx` extension (early indexed-archive prototype).
+- The earlier indexed-only public readers
+  (`iter_indexed_samples`, `read_indexed_header`, `read_indexed_sample`,
+  `read_indexed_samples`, `read_indexed_sample_summaries`). They are now
+  internal — use [`iter_samples`](#streaming-with-iter_samples),
+  [`read_samples`](#random-access-with-read_samples), and
+  [`read_info`](#header-only-reads-with-read_info) instead.
 
 Use `.inif.json` for plain JSON and `.inif` for the indexed archive.
 There is no third option.

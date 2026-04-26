@@ -16,9 +16,9 @@ InifDocument
 ├── metadata          — model info, source eval, packages, timestamps
 ├── sequences[]       — deduplicated token patterns shared across samples
 └── samples[]         — tokenized generation traces
-    ├── tokens[]      — token id + string, plus sparse extras
+    ├── tokens[]      — TokenOrSeqRef entries (vocab tokens or sequence refs), plus sparse extras
     ├── annotations[] — named token ranges with optional metadata
-    ├── texts[]       — original message strings
+    ├── texts[]       — Text segments ({name, value, metadata})
     ├── spans[]       — named position ranges
     └── scores[]      — evaluation scores (scorer, value, answer)
 ```
@@ -67,8 +67,8 @@ A `Sample` is one self-contained tokenized trace. The required field is
 | Field | Type | Used for |
 |---|---|---|
 | `id` | `str` | Unique within the document. Int ids (Inspect AI's default) are coerced to `str`. |
-| `tokens` | `list[Token]` | The token sequence — vocab tokens, sequence refs, or both. |
-| `texts` | `list[str]` | The original strings (one per chat message, or one per text input). |
+| `tokens` | `list[TokenOrSeqRef]` | The token sequence — vocab tokens, sequence refs, or both. |
+| `texts` | `list[Text]` | Named text segments (one per chat message with a role-based name, or one per plain-text input). See [Tokens](tokens.qmd#text-segments). |
 | `annotations` | `list[TokenAnnotation]` | Named half-open token ranges. See [Annotations](annotations.qmd). |
 | `spans` | `list[Span]` | Named position lists with optional tags / metadata. |
 | `scores` | `list[SampleScore]` | Per-scorer evaluation results. |
@@ -99,16 +99,17 @@ ever saved.
 ## Sequences
 
 A `Sequence` is a token run that appears in *every* sample of a document and
-gets stored once instead of repeating in each sample. Sequence-ref tokens
-inside samples point at the shared `Sequence.id`.
+gets stored once instead of repeating in each sample. Sequence-ref entries
+inside samples are `TokenOrSeqRef` with `id is None`; their `token` field
+carries the shared `Sequence.id`.
 
 ``` text
 Sequence(
     id="seq_0",
     n_tokens=3,
-    tokens=[Token(id=464, token="The"),
-            Token(id=3139, token=" capital"),
-            Token(id=286, token=" of")],
+    tokens=[TokenOrSeqRef(id=464, token="The"),
+            TokenOrSeqRef(id=3139, token=" capital"),
+            TokenOrSeqRef(id=286, token=" of")],
 )
 ```
 

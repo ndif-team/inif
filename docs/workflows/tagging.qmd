@@ -102,7 +102,7 @@ tag_by_predicates_all(doc, [
 ])
 ```
 
-Predicates receive the `Token` object (not just the string), so you can
+Predicates receive the `TokenOrSeqRef` object (not just the string), so you can
 filter by id, presence of extras, etc. Same sequence-ref handling as the
 regex helpers.
 

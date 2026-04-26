@@ -45,15 +45,19 @@ A collapsed run becomes a `Sequence`:
 Sequence(
     id="seq_0",
     n_tokens=14,
-    tokens=[Token(id=..., token=...) for _ in range(14)],
+    tokens=[TokenOrSeqRef(id=..., token=...) for _ in range(14)],
 )
 ```
 
 Each sample's matching window is replaced by a single sequence-ref token:
 
 ``` text
-Token(id=-1, sequence_id="seq_0")
+TokenOrSeqRef(id=None, token="seq_0")
 ```
+
+The target sequence id lives in the `token` field (there is no separate
+`sequence_id` field); `id is None` is the discriminator that marks this as
+a reference rather than a vocabulary token.
 
 `Sequence.id` is auto-assigned as `seq_0`, `seq_1`, …, skipping ids already
 present in `doc.sequences` so re-running dedup never collides.
@@ -81,7 +85,7 @@ Picking `min_length` is mostly an empirical call:
 ## Expansion
 
 `expand_sequences(doc)` rebuilds a flat document. Each ref token is
-replaced by fresh `Token(id=t.id, token=t.token)` instances drawn from the
+replaced by fresh `TokenOrSeqRef(id=t.id, token=t.token)` instances drawn from the
 referenced sequence. The returned document drops the sequence list entirely
 — running `deduplicate_sequences` again will rediscover the same shared
 runs.
