@@ -30,7 +30,6 @@ from inif.converters._tokenize import (
     messages_to_tokens,
     offset_mapping_decode,
     resolve_tokenizer,
-    tag_char_span,
 )
 from inif.models import (
     InifDocument,
@@ -39,7 +38,6 @@ from inif.models import (
     Sample,
     SampleScore,
     SourceEval,
-    Token,
 )
 from inif.sequences import deduplicate_sequences
 
@@ -183,24 +181,78 @@ def _build_sample_metadata(record: dict) -> dict[str, Any]:
     return md
 
 
-def _reasoning_text_for_record(record: dict) -> str | None:
-    """Concatenated reasoning text, if any, for char-span tagging.
+def _reasoning_spans_for_record(record: dict) -> list[tuple[int, str]]:
+    """Return ``(message_index, reasoning_text)`` spans for char-span tagging.
 
-    Mirrors the concatenation done in :func:`_messages_from_record` so the
-    substring lookup inside ``apply_chat_template`` actually finds it.
+    ``_messages_from_record`` prepends each reasoning trace to its message
+    content, so each trace is a per-message prefix rather than one contiguous
+    document-level string.
     """
     interaction = record.get("interaction_type", "single_turn")
     if interaction == "single_turn":
         trace = (record.get("output") or {}).get("reasoning_trace") or []
-        return "".join(trace) or None
-    pieces: list[str] = []
-    for msg in sorted(
-        (record.get("messages") or []), key=lambda m: m.get("turn_idx", 0)
+        reasoning = "".join(trace)
+        return [(1, reasoning)] if reasoning else []
+
+    spans: list[tuple[int, str]] = []
+    for i, msg in enumerate(
+        sorted((record.get("messages") or []), key=lambda m: m.get("turn_idx", 0))
     ):
         r = msg.get("reasoning_trace")
         if r:
-            pieces.append(r)
-    return "\n".join(pieces) if pieces else None
+            spans.append((i, r))
+    return spans
+
+
+def _tag_message_prefix_span(
+    sample: Sample,
+    msg_dicts: list[dict[str, str]],
+    tokenizer: Any,
+    message_index: int,
+    text: str,
+    tag: str,
+) -> bool:
+    """Tag a prefix span inside a specific message's rendered content."""
+    if not text or not hasattr(tokenizer, "apply_chat_template"):
+        return False
+    if message_index >= len(msg_dicts):
+        return False
+
+    formatted = tokenizer.apply_chat_template(
+        msg_dicts, tokenize=False, add_generation_prompt=False
+    )
+    decoded = [t.token or "" for t in sample.tokens]
+    if "".join(decoded) != formatted:
+        return False
+
+    search_from = 0
+    char_start: int | None = None
+    char_end: int | None = None
+    for i, msg in enumerate(msg_dicts):
+        content = msg.get("content", "")
+        if not content:
+            continue
+        content_start = formatted.find(content, search_from)
+        if content_start < 0:
+            return False
+        if i == message_index:
+            if not content.startswith(text):
+                return False
+            char_start = content_start
+            char_end = content_start + len(text)
+            break
+        search_from = content_start + len(content)
+
+    if char_start is None or char_end is None:
+        return False
+
+    pos = 0
+    for i, s in enumerate(decoded):
+        s_start, s_end = pos, pos + len(s)
+        if s_end > char_start and s_start < char_end:
+            sample.tokens[i].add_tag(tag)
+        pos = s_end
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -283,20 +335,18 @@ def from_instance_records(
 
     samples: list[Sample] = []
     all_msg_dicts: list[list[dict[str, str]]] = []
-    reasoning_texts: list[str | None] = []
 
     for record in records:
-        msg_dicts = _messages_from_record(record) if include_messages else []
-        texts: list[str] = []
-        sample_tokens: list[Token] = []
-        if include_messages:
-            texts, sample_tokens = messages_to_tokens(
-                msg_dicts,
-                tokenizer,
-                decode_cache=decode_cache,
-                byte_decoder=byte_decoder,
-                use_offset_mapping=use_offset_mapping,
-            )
+        msg_dicts = _messages_from_record(record)
+        texts, sample_tokens = messages_to_tokens(
+            msg_dicts,
+            tokenizer,
+            decode_cache=decode_cache,
+            byte_decoder=byte_decoder,
+            use_offset_mapping=use_offset_mapping,
+        )
+        if not include_messages:
+            texts = []
 
         score = _build_score(record)
         scores = [score] if score is not None else []
@@ -331,10 +381,11 @@ def from_instance_records(
                 for i in range(rng[0], rng[1]):
                     sample.tokens[i].add_tag("generated")
 
-        reasoning = _reasoning_text_for_record(record) if tag_reasoning else None
-        if reasoning:
-            tag_char_span(sample, msg_dicts, tokenizer, reasoning, "reasoning")
-        reasoning_texts.append(reasoning)
+        if tag_reasoning:
+            for msg_index, reasoning in _reasoning_spans_for_record(record):
+                _tag_message_prefix_span(
+                    sample, msg_dicts, tokenizer, msg_index, reasoning, "reasoning"
+                )
 
         all_msg_dicts.append(msg_dicts)
         samples.append(sample)

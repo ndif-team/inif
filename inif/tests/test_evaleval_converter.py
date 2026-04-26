@@ -252,6 +252,22 @@ def test_from_instance_records_single_turn():
     assert s.scores[0].metadata["is_correct"] is True
 
 
+def test_include_messages_false_still_tokenizes():
+    doc = from_instance_records(
+        [_make_record()],
+        tokenizer=_chat_tokenizer(),
+        include_messages=False,
+        deduplicate=False,
+        tag_chat_roles=False,
+    )
+    s = doc.samples[0]
+    assert s.texts == []
+    assert len(s.tokens) > 0
+    joined = "".join(t.token or "" for t in s.tokens)
+    assert "What is 2+2?" in joined
+    assert "The answer is 4." in joined
+
+
 def test_from_instance_records_multi_turn_with_tokenizer():
     record = _make_record(
         interaction_type="multi_turn",
@@ -428,6 +444,43 @@ def test_reasoning_tag_applied_via_char_span():
     assert "Answer: 4" in post_reasoning
 
 
+def test_reasoning_tag_applied_per_multi_turn_message():
+    record = _make_record(
+        interaction_type="multi_turn",
+        output_raw=(),
+        messages=[
+            {"turn_idx": 0, "role": "user", "content": "Question 1"},
+            {
+                "turn_idx": 1,
+                "role": "assistant",
+                "reasoning_trace": "think one. ",
+                "content": "Answer 1",
+            },
+            {"turn_idx": 2, "role": "user", "content": "Question 2"},
+            {
+                "turn_idx": 3,
+                "role": "assistant",
+                "reasoning_trace": "think two. ",
+                "content": "Answer 2",
+            },
+        ],
+    )
+    doc = from_instance_records(
+        [record],
+        tokenizer=_chat_tokenizer(),
+        deduplicate=False,
+        tag_reasoning=True,
+        tag_generated=False,
+        tag_chat_roles=False,
+    )
+    tokens = doc.samples[0].tokens
+    tagged_text = "".join(t.token or "" for t in tokens if t.has_tag("reasoning"))
+    assert tagged_text == "think one. think two. "
+    untagged_text = "".join(t.token or "" for t in tokens if not t.has_tag("reasoning"))
+    assert "Answer 1" in untagged_text
+    assert "Answer 2" in untagged_text
+
+
 # ---------------------------------------------------------------------------
 # Aggregate metadata + token usage + performance
 # ---------------------------------------------------------------------------
@@ -582,8 +635,21 @@ class _FakeAutoTokenizer:
         class _Tok:
             name_or_path = model_id
 
-            def apply_chat_template(self, messages, **kw):  # noqa: ARG002
-                return ""
+            def apply_chat_template(
+                self,
+                messages,
+                tokenize=True,
+                add_generation_prompt=False,  # noqa: ARG002
+                return_dict=False,  # noqa: ARG002
+                **kwargs,  # noqa: ARG002
+            ):
+                formatted = "".join(msg.get("content", "") for msg in messages)
+                if not tokenize:
+                    return formatted
+                return [ord(c) for c in formatted]
+
+            def decode(self, ids, skip_special_tokens=False):  # noqa: ARG002
+                return "".join(chr(i) for i in ids)
 
         return _Tok()
 
@@ -607,8 +673,6 @@ _RESOLVER_KWARGS = dict(
 def test_resolver_auto_loads_from_record_model_id(monkeypatch):
     _patch_autotokenizer(monkeypatch)
     record = _make_record(model_id="meta-llama/Llama-3.2-1B")
-    # ``include_messages=False`` short-circuits actual tokenization so this
-    # test only exercises the resolver path.
     from_instance_records([record], **_RESOLVER_KWARGS)
     assert _FakeAutoTokenizer.calls == ["meta-llama/Llama-3.2-1B"]
 
@@ -657,6 +721,12 @@ def test_resolver_instance_warns_on_mismatch():
 
     class _Tok:
         name_or_path = "Qwen/Qwen2.5-3B-Instruct"
+
+        def encode(self, text, add_special_tokens=False):  # noqa: ARG002
+            return [ord(c) for c in text]
+
+        def decode(self, ids, skip_special_tokens=False):  # noqa: ARG002
+            return "".join(chr(i) for i in ids)
 
     with pytest.warns(UserWarning, match="Tokenizer mismatch"):
         from_instance_records(
