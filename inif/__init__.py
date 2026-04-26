@@ -1,4 +1,14 @@
 from inif.flat import FlatTokenStore
+from inif.indexed import (
+    IndexedInifWriter,
+    iter_indexed_samples,
+    load_indexed,
+    read_indexed_header,
+    read_indexed_sample,
+    read_indexed_sample_summaries,
+    read_indexed_samples,
+    save_indexed,
+)
 from inif.io import from_dict, load, save, to_dict
 from inif.models import (
     InifDocument,
@@ -10,19 +20,19 @@ from inif.models import (
     SourceEval,
     Span,
     Token,
+    TokenAnnotation,
     TokenExtras,
 )
 from inif.schema import get_schema, validate, write_schema
 from inif.selectors import (
     TokenSelection,
     filter_samples_by_score,
+    select_by_annotation,
     select_by_position,
     select_by_sequence_id,
     select_by_span,
-    select_by_tag,
 )
 from inif.sequences import deduplicate_sequences, expand_sequences
-from inif.shards import iter_samples, iter_shards, load_shards, save_shards
 from inif.tagging import (
     TextTagMode,
     create_span_from_tag,
@@ -55,16 +65,21 @@ __all__ = [
     "SourceEval",
     "Span",
     "Token",
+    "TokenAnnotation",
     "TokenExtras",
     "FlatTokenStore",
     # IO
     "from_dict",
-    "iter_samples",
-    "iter_shards",
+    "IndexedInifWriter",
+    "iter_indexed_samples",
     "load",
-    "load_shards",
+    "load_indexed",
+    "read_indexed_header",
+    "read_indexed_sample",
+    "read_indexed_sample_summaries",
+    "read_indexed_samples",
     "save",
-    "save_shards",
+    "save_indexed",
     "to_dict",
     # Schema
     "get_schema",
@@ -73,10 +88,10 @@ __all__ = [
     # Selectors
     "TokenSelection",
     "filter_samples_by_score",
+    "select_by_annotation",
     "select_by_position",
     "select_by_sequence_id",
     "select_by_span",
-    "select_by_tag",
     # Tagging
     "TextTagMode",
     "create_span_from_tag",

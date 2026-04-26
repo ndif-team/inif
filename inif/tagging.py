@@ -22,11 +22,6 @@ class TextTagMode(str, Enum):
     LAST = "last"
 
 
-def _get_tags(token: Token) -> list[str]:
-    """Backwards-compatible accessor; prefer ``token.tags``."""
-    return token.tags
-
-
 def tag_by_regex(
     sample: Sample,
     pattern: str,
@@ -126,12 +121,11 @@ def tag_by_text_regex(
         if not matching_indices:
             continue
         if mode is TextTagMode.FIRST:
-            sample.tokens[matching_indices[0]].add_tag(tag)
+            sample.annotate_positions(tag, [matching_indices[0]])
         elif mode is TextTagMode.LAST:
-            sample.tokens[matching_indices[-1]].add_tag(tag)
+            sample.annotate_positions(tag, [matching_indices[-1]])
         else:
-            for i in matching_indices:
-                sample.tokens[i].add_tag(tag)
+            sample.annotate_positions(tag, matching_indices)
 
 
 def tag_by_text_regex_all(
@@ -170,15 +164,11 @@ def tag_by_predicates_all(
 
 
 def tag_positions(sample: Sample, positions: list[int], tag: str) -> None:
-    pos_set = set(positions)
-    for i, token in enumerate(sample.tokens):
-        if i in pos_set:
-            token.add_tag(tag)
+    sample.annotate_positions(tag, positions)
 
 
 def remove_tag(sample: Sample, tag: str) -> None:
-    for token in sample.tokens:
-        token.remove_tag(tag)
+    sample.remove_annotation(tag)
 
 
 def remove_tag_all(doc: InifDocument, tag: str) -> None:
@@ -187,7 +177,7 @@ def remove_tag_all(doc: InifDocument, tag: str) -> None:
 
 
 def create_span_from_tag(sample: Sample, tag: str, span_name: str) -> Span:
-    positions = [i for i, t in enumerate(sample.tokens) if t.has_tag(tag)]
+    positions = sample.annotation_positions(tag)
     span = Span(name=span_name, positions=positions, tags=[tag])
     sample.spans.append(span)
     return span
@@ -259,18 +249,22 @@ def tag_chat_roles(
                 break
         roles.append(role)
 
-    # Write roles to non-ref tokens; ref tokens stay collapsed because their
-    # contents share a single role within a deduplicated chat template.
     exp_idx = 0
     seq_map = {s.id: s for s in sequences} if sequences else {}
-    for tok in sample.tokens:
+    positions_by_role: dict[str, list[int]] = {}
+    for pos, tok in enumerate(sample.tokens):
         if tok.is_sequence_ref:
             assert tok.sequence_id is not None
             n = seq_map[tok.sequence_id].n_tokens
+            ref_roles = set(roles[exp_idx : exp_idx + n])
+            if len(ref_roles) == 1:
+                positions_by_role.setdefault(ref_roles.pop(), []).append(pos)
             exp_idx += n
         else:
-            tok.set_extra("role", roles[exp_idx])
+            positions_by_role.setdefault(roles[exp_idx], []).append(pos)
             exp_idx += 1
+    for role, positions in positions_by_role.items():
+        sample.annotate_positions(role, positions, metadata={"source": "message_role"})
 
 
 def tag_chat_roles_doc(
@@ -296,6 +290,8 @@ def tag_special_tokens(sample: Sample, tokenizer, tag: str = "special") -> None:
     special_ids = set()
     if hasattr(tokenizer, "all_special_ids"):
         special_ids = set(tokenizer.all_special_ids)
-    for token in sample.tokens:
+    positions: list[int] = []
+    for i, token in enumerate(sample.tokens):
         if not token.is_sequence_ref and token.id in special_ids:
-            token.add_tag(tag)
+            positions.append(i)
+    sample.annotate_positions(tag, positions)

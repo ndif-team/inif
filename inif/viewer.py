@@ -8,8 +8,8 @@ from typing import Any
 from inif.io import to_dict
 from inif.models import InifDocument
 
-# 12 muted pastel colors for tags
-_TAG_PALETTE = [
+# 12 muted pastel colors for annotations
+_ANNOTATION_PALETTE = [
     "#b3d9ff",  # light blue
     "#ffd9b3",  # light orange
     "#d9b3ff",  # light purple
@@ -40,8 +40,8 @@ _SPAN_PALETTE = [
     "#cc9933",
 ]
 
-# Role-based background colors for token highlighting
-_ROLE_PALETTE = {
+# Stable colors for common chat-role annotations
+_ROLE_ANNOTATION_PALETTE = {
     "system": "#d4e6f1",
     "user": "#d5f5e3",
     "assistant": "#fdebd0",
@@ -61,7 +61,13 @@ _EXTRA_PALETTE = [
 ]
 
 # Token dict keys that do NOT produce an underline
-_EXTRA_SKIP = {"id", "token", "seq_id", "sequence_id", "role", "tags", "_seq_ref"}
+_EXTRA_SKIP = {"id", "token", "seq_id", "sequence_id", "_seq_ref"}
+
+
+def _annotation_color(name: str) -> str:
+    if name in _ROLE_ANNOTATION_PALETTE:
+        return _ROLE_ANNOTATION_PALETTE[name]
+    return _ANNOTATION_PALETTE[hash(name) % len(_ANNOTATION_PALETTE)]
 
 
 def _detect_newline_chars(tokenizer: Any) -> frozenset[str]:
@@ -231,21 +237,13 @@ def _render_css() -> str:
     color: #aaa;
     cursor: default;
 }
-.inif-role-legend, .inif-tag-legend, .inif-extras-legend {
+.inif-annotation-legend, .inif-extras-legend {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
     font-size: 0.8em;
 }
-.inif-role-swatch {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border-radius: 2px;
-    vertical-align: middle;
-    margin-right: 3px;
-}
-.inif-tag-swatch {
+.inif-annotation-swatch {
     display: inline-block;
     width: 12px;
     height: 12px;
@@ -395,32 +393,25 @@ def _render_js() -> str:
 
     /* Shared: recompute token backgrounds from toggle states */
     function updateTokenBgs(panel) {
-        var rc = panel.querySelector('.inif-role-toggle');
-        var tc = panel.querySelector('.inif-tag-toggle');
-        var roleOn = rc && rc.checked;
-        var tagOn = tc && tc.checked;
+        var ac = panel.querySelector('.inif-annotation-toggle');
+        var annotationOn = ac && ac.checked;
         var tokens = panel.querySelectorAll('.inif-token');
         for (var i = 0; i < tokens.length; i++) {
             var tok = tokens[i];
             var bg = '';
-            if (roleOn) {
-                var rb = tok.getAttribute('data-role-bg');
-                if (rb) bg = rb;
-            }
-            if (!bg && tagOn) {
-                var tb = tok.getAttribute('data-tag-bg');
+            if (annotationOn) {
+                var tb = tok.getAttribute('data-annotation-bg');
                 if (tb) bg = tb;
             }
             tok.style.background = bg;
         }
     }
 
-    /* Role highlight checkbox */
+    /* Annotation highlight checkbox */
     document.addEventListener('change', function(e) {
         var cb = e.target;
         if (!cb.classList) return;
-        if (!cb.classList.contains('inif-role-toggle')
-            && !cb.classList.contains('inif-tag-toggle')) return;
+        if (!cb.classList.contains('inif-annotation-toggle')) return;
         var panel = cb.closest('.inif-sample-panel');
         if (panel) updateTokenBgs(panel);
     });
@@ -528,34 +519,30 @@ def _render_sidebar(doc_data: dict, samples: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _sample_has_roles(sample_data: dict) -> bool:
-    return any("role" in tok for tok in sample_data.get("tokens", []))
+def _sample_has_annotations(sample_data: dict) -> bool:
+    return bool(sample_data.get("annotations"))
 
 
-def _sample_has_tags(sample_data: dict) -> bool:
-    return any("tags" in tok for tok in sample_data.get("tokens", []))
+def _collect_active_annotations(sample_data: dict) -> dict[str, str]:
+    """Map each annotation present in the sample to its color."""
+    annotations: dict[str, str] = {}
+    for annotation in sample_data.get("annotations", []):
+        name = annotation.get("name")
+        if name and isinstance(name, str) and name not in annotations:
+            annotations[name] = _annotation_color(name)
+    return annotations
 
 
-def _collect_active_roles(tokens: list[dict]) -> dict[str, str]:
-    """Map each role present in the sample to its color."""
-    roles: dict[str, str] = {}
-    for tok in tokens:
-        role = tok.get("role")
-        if role and isinstance(role, str) and role not in roles:
-            roles[role] = _ROLE_PALETTE.get(role, "#f0f0f0")
-    return roles
-
-
-def _collect_active_tags(tokens: list[dict]) -> dict[str, str]:
-    """Map each tag present in the sample to its color."""
-    tags: dict[str, str] = {}
-    for tok in tokens:
-        tok_tags = tok.get("tags")
-        if tok_tags and isinstance(tok_tags, list):
-            for t in tok_tags:
-                if t not in tags:
-                    tags[t] = _TAG_PALETTE[hash(t) % len(_TAG_PALETTE)]
-    return tags
+def _token_annotation_names(sample_data: dict) -> dict[int, list[str]]:
+    by_pos: dict[int, list[str]] = {}
+    for annotation in sample_data.get("annotations", []):
+        name = annotation.get("name")
+        if not name:
+            continue
+        for start, end in annotation.get("ranges", []):
+            for pos in range(start, end):
+                by_pos.setdefault(pos, []).append(name)
+    return by_pos
 
 
 def _collect_extra_field_colors(
@@ -572,29 +559,14 @@ def _collect_extra_field_colors(
     }
 
 
-def _render_role_legend(active_roles: dict[str, str]) -> str:
-    if not active_roles:
+def _render_annotation_legend(active_annotations: dict[str, str]) -> str:
+    if not active_annotations:
         return ""
-    parts = ['<div class="inif-role-legend">']
-    for name, color in active_roles.items():
+    parts = ['<div class="inif-annotation-legend">']
+    for name, color in active_annotations.items():
         esc = _escape(name)
         parts.append(
-            f'<span><span class="inif-role-swatch" '
-            f'style="background:{color}"></span>'
-            f"{esc}</span>"
-        )
-    parts.append("</div>")
-    return "\n".join(parts)
-
-
-def _render_tag_legend(active_tags: dict[str, str]) -> str:
-    if not active_tags:
-        return ""
-    parts = ['<div class="inif-tag-legend">']
-    for name, color in active_tags.items():
-        esc = _escape(name)
-        parts.append(
-            f'<span><span class="inif-tag-swatch" '
+            f'<span><span class="inif-annotation-swatch" '
             f'style="background:{color}"></span>'
             f"{esc}</span>"
         )
@@ -621,10 +593,8 @@ def _render_extras_legend(
 
 def _render_sample_header(
     sample_data: dict,
-    has_roles: bool,
-    has_tags: bool,
-    active_roles: dict[str, str],
-    active_tags: dict[str, str],
+    has_annotations: bool,
+    active_annotations: dict[str, str],
     extra_colors: dict[str, str],
 ) -> str:
     parts = ['<div class="inif-sample-header">']
@@ -650,37 +620,21 @@ def _render_sample_header(
 
     # Right: control panel (column layout)
     parts.append('<div class="inif-control-panel">')
-    if has_roles:
+    if has_annotations:
         parts.append(
-            '<label><input type="checkbox" class="inif-role-toggle" checked>'
-            " Highlight roles</label>"
+            '<label><input type="checkbox" class="inif-annotation-toggle" checked>'
+            " Highlight annotations</label>"
         )
     else:
         parts.append(
             '<label class="disabled">'
-            '<input type="checkbox" class="inif-role-toggle" disabled>'
-            " Highlight roles</label>"
+            '<input type="checkbox" class="inif-annotation-toggle" disabled>'
+            " Highlight annotations</label>"
         )
 
-    if has_tags:
-        parts.append(
-            '<label><input type="checkbox" class="inif-tag-toggle" checked>'
-            " Highlight tags</label>"
-        )
-    else:
-        parts.append(
-            '<label class="disabled">'
-            '<input type="checkbox" class="inif-tag-toggle" disabled>'
-            " Highlight tags</label>"
-        )
-
-    role_legend = _render_role_legend(active_roles)
-    if role_legend:
-        parts.append(role_legend)
-
-    tag_legend = _render_tag_legend(active_tags)
-    if tag_legend:
-        parts.append(tag_legend)
+    annotation_legend = _render_annotation_legend(active_annotations)
+    if annotation_legend:
+        parts.append(annotation_legend)
 
     extras_legend = _render_extras_legend(extra_colors)
     if extras_legend:
@@ -697,6 +651,8 @@ def _render_token(
     position: int,
     span_positions: dict[int, str],
     seq_map: dict[str, dict],
+    annotations: list[str],
+    annotation_colors: dict[str, str],
     extra_colors: dict[str, str] | None = None,
     newline_chars: frozenset[str] = _DEFAULT_NL,
 ) -> str:
@@ -708,36 +664,24 @@ def _render_token(
     # Extra fields for tooltip (exclude id, token, seq_id/sequence_id)
     skip = ("id", "token", "seq_id", "sequence_id", "_seq_ref")
     extra = {k: v for k, v in tok_data.items() if k not in skip}
+    if annotations:
+        extra["annotations"] = annotations
     tooltip_json = html.escape(json.dumps(extra, default=str), quote=True)
 
     classes = ["inif-token"]
     style_parts = []
     data_attrs: list[str] = []
 
-    # Tag coloring
-    tag_bg = ""
-    tags = tok_data.get("tags")
-    if tags and isinstance(tags, list) and len(tags) > 0:
-        tag_bg = _TAG_PALETTE[hash(tags[0]) % len(_TAG_PALETTE)]
-
-    # Role coloring
-    role = tok_data.get("role")
-    role_bg = ""
-    if role and isinstance(role, str):
-        role_bg = _ROLE_PALETTE.get(role, "#f0f0f0")
-
-    # Store data attributes for JS toggling
-    if tag_bg:
-        data_attrs.append(f'data-tag-bg="{tag_bg}"')
-    if role_bg:
-        data_attrs.append(f'data-role="{html.escape(str(role), quote=True)}"')
-        data_attrs.append(f'data-role-bg="{role_bg}"')
-
-    # Default: role bg takes priority, then tag bg
-    if role_bg:
-        style_parts.append(f"background:{role_bg}")
-    elif tag_bg:
-        style_parts.append(f"background:{tag_bg}")
+    annotation_bg = ""
+    if annotations:
+        annotation_bg = annotation_colors.get(
+            annotations[0], _annotation_color(annotations[0])
+        )
+        data_attrs.append(f'data-annotation-bg="{annotation_bg}"')
+        data_attrs.append(
+            f'data-annotations="{html.escape(",".join(annotations), quote=True)}"'
+        )
+        style_parts.append(f"background:{annotation_bg}")
 
     # Sequence ref — only apply fallback text if not already expanded
     if is_ref:
@@ -803,11 +747,12 @@ def _render_token_strip(
             if pos not in span_positions:
                 span_positions[pos] = color
 
-    has_roles = _sample_has_roles(sample_data)
+    annotation_names = _token_annotation_names(sample_data)
     tokens = sample_data.get("tokens", [])
-    data_has_roles = "true" if has_roles else "false"
-    hr = data_has_roles
-    parts = [f'<div class="inif-token-strip" data-has-roles="{hr}">']
+    has_annotations = _sample_has_annotations(sample_data)
+    ha = "true" if has_annotations else "false"
+    annotation_colors = _collect_active_annotations(sample_data)
+    parts = [f'<div class="inif-token-strip" data-has-annotations="{ha}">']
     for idx, tok in enumerate(tokens):
         tok_id = tok.get("id", 0)
         seq_id = tok.get("seq_id") or tok.get("sequence_id")
@@ -829,6 +774,8 @@ def _render_token_strip(
                             idx,
                             span_positions,
                             seq_map,
+                            annotation_names.get(idx, []),
+                            annotation_colors,
                             extra_colors,
                             newline_chars,
                         )
@@ -838,7 +785,14 @@ def _render_token_strip(
                 continue
         parts.append(
             _render_token(
-                tok, idx, span_positions, seq_map, extra_colors, newline_chars
+                tok,
+                idx,
+                span_positions,
+                seq_map,
+                annotation_names.get(idx, []),
+                annotation_colors,
+                extra_colors,
+                newline_chars,
             )
         )
         if _has_newline(tok, newline_chars):
@@ -911,15 +865,13 @@ def _render_sample_panel(
     newline_chars: frozenset[str] = _DEFAULT_NL,
 ) -> str:
     tokens = sample_data.get("tokens", [])
-    has_roles = _sample_has_roles(sample_data)
-    has_tags = _sample_has_tags(sample_data)
-    active_roles = _collect_active_roles(tokens)
-    active_tags = _collect_active_tags(tokens)
+    has_annotations = _sample_has_annotations(sample_data)
+    active_annotations = _collect_active_annotations(sample_data)
     extra_colors = _collect_extra_field_colors(tokens)
     parts = []
 
     header_html = _render_sample_header(
-        sample_data, has_roles, has_tags, active_roles, active_tags, extra_colors
+        sample_data, has_annotations, active_annotations, extra_colors
     )
     if header_html:
         parts.append(header_html)

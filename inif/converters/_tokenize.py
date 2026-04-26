@@ -227,12 +227,14 @@ def tag_char_span(
     if char_start < 0:
         return False
     char_end = char_start + len(text)
+    positions: list[int] = []
     pos = 0
     for i, s in enumerate(decoded):
         s_start, s_end = pos, pos + len(s)
         if s_end > char_start and s_start < char_end:
-            sample.tokens[i].add_tag(tag)
+            positions.append(i)
         pos = s_end
+    sample.annotate_positions(tag, positions)
     return True
 
 

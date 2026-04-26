@@ -9,6 +9,7 @@ from inif.models import (
     Sequence,
     Span,
     Token,
+    TokenAnnotation,
 )
 
 
@@ -58,7 +59,7 @@ def test_token_expanded_tokens(sequences):
     assert expanded[1].token == "This"
     assert expanded[2].id == 318
     assert expanded[2].token == " is"
-    assert all(t.sequence_id == "seq_0" for t in expanded)
+    assert all(t.sequence_id is None for t in expanded)
 
 
 def test_token_expanded_regular(sequences):
@@ -75,8 +76,8 @@ def test_token_expanded_missing_sequence():
 
 
 def test_token_extra_fields():
-    t = Token(id=1, token="hello", role="user", logprob=-0.5)
-    assert t.get_extra("role") == "user"
+    t = Token(id=1, token="hello", source="user", logprob=-0.5)
+    assert t.get_extra("source") == "user"
     assert t.get_extra("logprob") == -0.5
 
 
@@ -110,29 +111,25 @@ def test_token_set_get_pop_extra():
     assert t.pop_extra("missing", "fallback") == "fallback"
 
 
-def test_token_tags_api():
-    t = Token(id=1, token="x")
-    assert t.tags == []
-    assert not t.has_tag("foo")
+def test_sample_annotation_api():
+    s = Sample(
+        id="x",
+        tokens=[Token(id=1, token="a"), Token(id=2, token="b"), Token(id=3, token="c")],
+    )
 
-    t.add_tag("foo")
-    t.add_tag("bar")
-    t.add_tag("foo")  # idempotent
-    assert t.tags == ["foo", "bar"]
-    assert t.has_tag("foo")
-    assert t.model_dump()["tags"] == ["foo", "bar"]
+    s.annotate_positions("foo", [0, 2])
+    s.annotate("foo", [(1, 2)])
 
-    t.remove_tag("foo")
-    assert t.tags == ["bar"]
-    t.remove_tag("bar")
-    assert t.tags == []
-    # When the last tag is removed, the field is dropped from serialization
-    assert "tags" not in t.model_dump()
+    assert s.annotations == [TokenAnnotation(name="foo", ranges=[(0, 3)])]
+    assert s.annotation_positions("foo") == [0, 1, 2]
+
+    s.remove_annotation("foo")
+    assert s.annotations == []
 
 
 def test_token_extras_property():
-    t = Token(id=1, token="x", role="user", logprob=-0.5)
-    assert t.extras == {"role": "user", "logprob": -0.5}
+    t = Token(id=1, token="x", source="user", logprob=-0.5)
+    assert t.extras == {"source": "user", "logprob": -0.5}
 
 
 def test_sample_get_expanded_tokens(sample, sequences):
@@ -162,6 +159,7 @@ def test_sample_materialize_position_in_ref(sample, sequences):
     assert sample.tokens[0].id == 50256
     assert sample.tokens[1].id == 1212
     assert sample.tokens[2].id == 318
+    assert sample.annotation_positions("content") == [4]
     # The other ref (seq_1) is untouched
     assert sample.tokens[-1].is_sequence_ref
     assert sample.tokens[-1].sequence_id == "seq_1"
@@ -317,10 +315,10 @@ def test_document_subset_deep_copies_tokens_and_sequences():
 
     sub = doc.subset(lambda s: s.id == "x")
     sub.samples[0].tokens[0].set_extra("note", "sample")
-    sub.sequences[0].tokens[0].add_tag("sequence")
+    sub.sequences[0].tokens[0].set_extra("note", "sequence")
 
     assert not doc.samples[0].tokens[0].has_extra("note")
-    assert not doc.sequences[0].tokens[0].has_tag("sequence")
+    assert not doc.sequences[0].tokens[0].has_extra("note")
 
 
 def test_metadata_created_at_is_datetime():
@@ -373,10 +371,29 @@ def test_span_positions_in_bounds_ok():
     assert s.spans[0].positions == [0, 1]
 
 
+def test_annotation_ranges_validated_against_tokens():
+    with pytest.raises(ValidationError, match="out of range"):
+        Sample(
+            id="x",
+            tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+            annotations=[TokenAnnotation(name="bad", ranges=[(0, 3)])],
+        )
+
+
+def test_annotation_ranges_are_merged():
+    s = Sample(
+        id="x",
+        tokens=[Token(id=1, token="a"), Token(id=2, token="b"), Token(id=3, token="c")],
+        annotations=[TokenAnnotation(name="ok", ranges=[(1, 2), (0, 1)])],
+    )
+    assert s.annotations[0].ranges == [(0, 2)]
+
+
 def test_sample_defaults():
     s = Sample(id="x")
     assert s.tokens == []
     assert s.texts == []
+    assert s.annotations == []
     assert s.spans == []
     assert s.scores == []
     assert s.target is None

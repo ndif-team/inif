@@ -159,7 +159,7 @@ class ChatMockTokenizer:
 
 
 def test_from_texts_with_messages():
-    """from_texts auto-detects chat inputs, uses apply_chat_template and tags roles."""
+    """from_texts auto-detects chat inputs and annotates chat roles."""
     tokenizer = ChatMockTokenizer()
     messages = [
         [{"role": "user", "content": "Hi"}],
@@ -181,15 +181,6 @@ def test_from_texts_with_messages():
     # Tokens should include template delimiters (more tokens than just "Hi")
     assert len(doc.samples[0].tokens) > 2
 
-    # All tokens should have role extra field
-    for sample in doc.samples:
-        for tok in sample.tokens:
-            if not tok.is_sequence_ref:
-                assert "role" in (tok.model_extra or {}), (
-                    f"Token {tok.token!r} missing role"
-                )
-
-    # Check specific roles present
-    roles_s0 = [tok.model_extra.get("role") for tok in doc.samples[0].tokens]
-    assert "user" in roles_s0
-    assert "template" in roles_s0
+    # Check specific annotations present
+    assert doc.samples[0].annotation_positions("user")
+    assert doc.samples[0].annotation_positions("template")

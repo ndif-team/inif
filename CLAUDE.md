@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with the `inif` package.
 
 ## What is inif
 
-INterpretability Interchange Format — a JSON-based format for tokenized LLM generation traces with support for tagging, position selection, and storing interpretability outputs. Designed as the interchange layer between eval frameworks (Inspect AI) and interpretability tools (nnterp/nnsight).
+INterpretability Interchange Format — a JSON-based format for tokenized LLM generation traces with support for token annotations, position selection, and storing interpretability outputs. Designed as the interchange layer between eval frameworks (Inspect AI) and interpretability tools (nnterp/nnsight).
 
 ## Development Commands
 
@@ -29,8 +29,9 @@ Research-oriented library. Follow nnterp conventions:
 
 - `models.py` — Core Pydantic models (InifDocument, Sample, Token, Sequence, etc.)
 - `schema.py` — JSON schema dict + validation
-- `io.py` — save/load (.inif.json, .inif.json.gz)
-- `selectors.py` — Position selection by index/tag/span/sequence_id/score
+- `io.py` — save/load (.inif.json, .inif indexed archive)
+- `indexed.py` — single-file indexed `.inif` archive writer/readers
+- `selectors.py` — Position selection by index/annotation/span/sequence_id/score
 - `tagging.py` — Regex-based auto-tagging, span creation
 - `sequences.py` — Sequence deduplication (lmout-style set-intersection) and expansion
 - `converters/inspect_ai.py` — Inspect AI EvalLog converter
@@ -43,13 +44,12 @@ Research-oriented library. Follow nnterp conventions:
 
 - **Token.id**: `>= 0` = vocabulary token ID, `-1` = reference to a sequence. A `@model_validator` enforces the sentinel: vocab tokens require `token: str`, sequence-ref tokens require `sequence_id: str`.
 - **Token.sequence_id**: string ref to `Sequence.id` (only set on sequence ref tokens)
-- **Token extras API**: Tags, logprob, role, logit_lens data, etc. live in `model_extra` (pydantic `extra="allow"`). Use the dedicated helpers — they keep `__dict__` and `model_extra` in sync so the field both shows up under attribute access and serializes:
-  - tags: `token.tags`, `token.has_tag(t)`, `token.add_tag(t)`, `token.remove_tag(t)`
-  - generic: `token.get_extra(key, default)`, `token.set_extra(key, value)`, `token.has_extra(key)`, `token.pop_extra(key)`, `token.extras` (snapshot dict)
-- **`TokenExtras`**: documentation-only Pydantic model declaring the conventional extras (`tags`, `role`, `logprob`, `logit_lens`); embedded under `$defs.TokenExtras` in the JSON schema for external validators/UIs.
+- **Token extras API**: Sparse per-token values such as logprob, logit_lens data, probes, etc. live in `model_extra` (pydantic `extra="allow"`). Use the dedicated helpers — they keep `__dict__` and `model_extra` in sync so the field both shows up under attribute access and serializes: `token.get_extra(key, default)`, `token.set_extra(key, value)`, `token.has_extra(key)`, `token.pop_extra(key)`, `token.extras` (snapshot dict).
+- **`TokenAnnotation`**: repeated labels live at `Sample.annotations` as `{name, ranges, metadata}`. Ranges are half-open token offsets (`[start, end)`) and are merged when metadata matches. Chat roles, generated output, reasoning traces, and regex labels are all annotations; roles are just auto-parsed annotation names from messages.
+- **`TokenExtras`**: documentation-only Pydantic model declaring the conventional token extras (`logprob`, `logit_lens`); embedded under `$defs.TokenExtras` in the JSON schema for external validators/UIs.
 - **Sequence**: stores both `tokens: list[str]` and `ids: list[int]` (parallel arrays). Required so dedup → expand round-trips preserve real vocabulary IDs even after a sample has been compressed and later materialized.
 - **Sample.id**: always `str`. A `@field_validator(mode="before")` coerces ints (Inspect AI uses int sample ids by default).
-- **Sample.spans**: validated against `len(tokens)` at construction; out-of-range positions raise `ValidationError`.
+- **Sample.spans / Sample.annotations**: validated against `len(tokens)` at construction; out-of-range positions/ranges raise `ValidationError`.
 - **Sample first-class fields aligned with EEE**: `target` (singleton convenience), `references: list[str]` (full ground-truth list), `choices: list[str] | None` (MCQ options), `interaction_type: str | None` (`"single_turn"` / `"multi_turn"` / `"agentic"`), `error: str | None` (API timeouts, refusals, etc.), `sample_hash: str | None` (cross-model comparison key). These used to live under `Sample.metadata` for the evaleval converter; they are now top-level so filters / viewers / downstream tools can rely on them without key archaeology.
 - **Sample.materialize_position(expanded_pos, sequences)**: expands the containing sequence ref in-place when `expanded_pos` falls inside one, returning `(actual_index, real_token)`. Other refs and other samples are left untouched.
 - **InifDocument.total_samples**: computed property (`len(samples)`) — there is no stored field.
@@ -68,7 +68,7 @@ Research-oriented library. Follow nnterp conventions:
 
 ## Inspect AI converter conventions
 
-- **`tag_generated=True`** (default): tokens belonging to the LAST assistant message are tagged `"generated"`. Identification uses character-span matching against `apply_chat_template` output, so it works for any HuggingFace chat template.
+- **`tag_generated=True`** (default): tokens belonging to the LAST assistant message are annotated `"generated"`. Identification uses character-span matching against `apply_chat_template` output, so it works for any HuggingFace chat template.
 - **`extract_logprobs=True`** (default): per-token logprobs from `inspect_sample.output.choices[0].logprobs.content` are attached to the response tokens via `set_extra("logprob", ...)`. Best-effort: skipped silently when the eval-source tokenization disagrees with our tokenizer on token count.
 - **`filter_samples_by_score(doc, scorer, predicate)`** returns `list[Sample]` (compose with the position selectors). The old `select_by_score` is gone.
 
@@ -77,11 +77,11 @@ Research-oriented library. Follow nnterp conventions:
 - **Schema**: targets `instance_level_eval_0.2.2` from `evaleval/every_eval_ever`. Trusted as-is — users who want jsonschema validation should run it themselves against the upstream schema before calling the converter.
 - **Three entry points** in `inif/converters/evaleval.py`: `from_instance_records(records, aggregate=None, ...)` (core), `from_eval_json(aggregate_path, instances_path, ...)` (local JSON / JSONL), `from_hf_dataset(config, split="samples", aggregate_config=None, limit=None, ...)` (streams rows from `evaleval/EEE_datastore`).
 - **Interaction types**: `single_turn` synthesises `user` + `assistant` messages; `multi_turn` / `agentic` use the `messages[]` array directly, ordered by `turn_idx`. `tool_calls` are rendered into assistant content as `<tool_call name=… args={…}/>` so the invocations survive tokenization.
-- **Reasoning traces**: when `tag_reasoning=True` (default), reasoning-trace tokens are char-span tagged with `"reasoning"`. Best-effort: silently skipped when the tokenizer's per-token decode doesn't round-trip to `apply_chat_template`.
+- **Reasoning traces**: when `tag_reasoning=True` (default), reasoning-trace tokens are char-span annotated with `"reasoning"`. Best-effort: silently skipped when the tokenizer's per-token decode doesn't round-trip to `apply_chat_template`.
 - **Score**: `SampleScore` is built from `evaluation.score` (`scorer = evaluation_name`). The terminal `answer_attribution` entry feeds `SampleScore.answer`; non-terminal entries land in `Sample.metadata["intermediate_answers"]`.
 - **Metadata mapping**: `token_usage.input_tokens`/`output_tokens` → `Sample.input_tokens`/`output_tokens`; `input.reference` → `Sample.references` (+ `Sample.target` when length 1); `input.choices` → `Sample.choices`; `interaction_type`, `error`, `sample_hash` → same-named first-class `Sample` fields. `performance`, `num_turns`, `tool_calls_count`, `reasoning_tokens`, per-sample EEE `metadata`, non-terminal `answer_attribution` entries → `Sample.metadata`. Aggregate record (when supplied) contributes `Metadata.extra["inference"]`, `["eval_library"]`, `["metric_config"]`, `["aggregate_score"]`.
 - **Optional extra**: `pip install inif[evaleval]` pulls `datasets` (imported lazily inside `from_hf_dataset`).
 
 ## IO conventions
 
-- **`save(doc, path, compress=None)`** and **`load(path, compress=None)`** are symmetric. Suffix-based detection: `.gz` and `.inif` ⇒ gzipped; everything else ⇒ plain JSON. `compress=True/False` overrides the detection.
+- **`save(doc, path, compress=None)`** and **`load(path, compress=None)`** are symmetric. Suffix-based detection: `.inif` ⇒ indexed archive; `.inif.json` / `.json` ⇒ plain JSON. `.gz`, `.inifx`, and `compress=True/False` overrides are no longer supported.

@@ -1,19 +1,33 @@
 from __future__ import annotations
 
-import gzip
 import json
 from pathlib import Path
 from typing import Any
 
 from inif.models import InifDocument
 
-# A path is considered gzipped (and gets gzip read/write) when its last suffix
-# is one of these. ``.inif`` is the convention for a fully-compressed bundle.
-_GZIP_SUFFIXES = frozenset({".gz", ".inif"})
+_INDEXED_SUFFIXES = frozenset({".inif"})
+_UNSUPPORTED_COMPRESSED_SUFFIXES = frozenset({".gz"})
+_UNSUPPORTED_INDEXED_SUFFIXES = frozenset({".inifx"})
 
 
-def _is_gzipped_path(path: Path) -> bool:
-    return path.suffix in _GZIP_SUFFIXES
+def _is_indexed_path(path: Path) -> bool:
+    return path.suffix in _INDEXED_SUFFIXES
+
+
+def _assert_json_or_indexed(path: Path, compress: bool | None) -> None:
+    assert compress is None, (
+        "`compress` is no longer supported. Use `.inif.json` for plain JSON "
+        "or `.inif` for the indexed compressed archive."
+    )
+    assert path.suffix not in _UNSUPPORTED_COMPRESSED_SUFFIXES, (
+        "gzip `.gz` INIF files are no longer supported. Use `.inif.json` for "
+        "plain JSON or `.inif` for the indexed compressed archive."
+    )
+    assert path.suffix not in _UNSUPPORTED_INDEXED_SUFFIXES, (
+        "`.inifx` is no longer supported. Use `.inif` for the indexed "
+        "compressed archive."
+    )
 
 
 def to_dict(doc: InifDocument, compact: bool = True) -> dict:
@@ -42,40 +56,25 @@ def _is_token_list(value: list) -> bool:
     )
 
 
-def _format_token_list(tokens: list[dict], pad: str) -> list[str]:
-    """Render each token dict on a single line with the ``"id"`` column aligned.
+_TOKEN_CORE_KEYS = {"id", "token", "sequence_id"}
 
-    The left side of each line contains every key except ``id`` (as a
-    comma-terminated JSON fragment); the right side is ``"id": N}``. Left
-    fragments are padded so the ``"id"`` keys line up across the list.
-    """
-    lefts: list[str] = []
-    rights: list[str] = []
-    for tok in tokens:
-        non_id = [(k, v) for k, v in tok.items() if k != "id"]
-        left = ", ".join(
-            f"{json.dumps(k, ensure_ascii=False)}: {json.dumps(v, ensure_ascii=False)}"
-            for k, v in non_id
-        )
-        if non_id:
-            left += ","
-        lefts.append(left)
-        rights.append(f'"id": {json.dumps(tok["id"])}')
 
-    max_left = max(len(left) for left in lefts)
-    lines: list[str] = []
-    for left, right in zip(lefts, rights):
-        if max_left > 0:
-            padded = left.ljust(max_left)
-            lines.append(f"{pad}{{{padded} {right}}}")
-        else:
-            lines.append(f"{pad}{{{right}}}")
-    return lines
+def _is_token_without_extras(tok: dict) -> bool:
+    return all(k in _TOKEN_CORE_KEYS for k in tok.keys())
+
+
+def _format_token_inline(tok: dict) -> str:
+    parts = [
+        f"{json.dumps(k, ensure_ascii=False)}: {json.dumps(v, ensure_ascii=False)}"
+        for k, v in tok.items()
+    ]
+    return "{" + ", ".join(parts) + "}"
 
 
 def _dumps_pretty(value: Any, indent: int = 4, level: int = 0) -> str:
-    """Custom JSON encoder: ``indent`` spaces for containers, token lists
-    rendered compactly one-per-line with aligned columns.
+    """Custom JSON encoder: ``indent`` spaces for containers; token dicts
+    without extras (only ``id`` / ``token`` / ``sequence_id``) render on a
+    single line, token dicts with extras render multi-line like any other dict.
     """
     pad = " " * (indent * level)
     inner_pad = " " * (indent * (level + 1))
@@ -94,7 +93,12 @@ def _dumps_pretty(value: Any, indent: int = 4, level: int = 0) -> str:
         if not value:
             return "[]"
         if _is_token_list(value):
-            lines = _format_token_list(value, inner_pad)
+            lines = []
+            for tok in value:
+                if _is_token_without_extras(tok):
+                    lines.append(f"{inner_pad}{_format_token_inline(tok)}")
+                else:
+                    lines.append(f"{inner_pad}{_dumps_pretty(tok, indent, level + 1)}")
             return "[\n" + ",\n".join(lines) + "\n" + pad + "]"
         parts = [f"{inner_pad}{_dumps_pretty(v, indent, level + 1)}" for v in value]
         return "[\n" + ",\n".join(parts) + "\n" + pad + "]"
@@ -111,42 +115,45 @@ def save(
 ) -> None:
     """Save ``doc`` to ``path``.
 
-    ``compress`` controls gzip compression: ``True`` forces gzip, ``False``
-    forces plain text, ``None`` (default) infers from the path suffix —
-    gzipped iff the suffix is ``.gz`` or ``.inif``.
+    ``.inif`` paths are written as indexed compressed archives. JSON paths are
+    written as plain JSON. The old gzip ``compress`` override is no longer
+    supported.
 
     ``indent`` controls pretty-printing: a positive int uses the custom inif
     formatter (tokens rendered one-per-line with aligned ``"id"`` columns);
     ``None`` produces a single-line dump via ``json.dumps``.
     """
     path = Path(path)
+    _assert_json_or_indexed(path, compress)
+    if _is_indexed_path(path):
+        from inif.indexed import save_indexed
+
+        save_indexed(doc, path, compact=compact)
+        return
+
     data = to_dict(doc, compact=compact)
     if indent is None or indent <= 0:
         json_str = json.dumps(data, ensure_ascii=False)
     else:
         json_str = _dumps_pretty(data, indent=indent)
 
-    use_gzip = compress if compress is not None else _is_gzipped_path(path)
-    if use_gzip:
-        with gzip.open(path, "wt", encoding="utf-8") as f:
-            f.write(json_str)
-    else:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(json_str)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json_str)
 
 
 def load(path: str | Path, compress: bool | None = None) -> InifDocument:
     """Load an inif document from ``path``.
 
-    ``compress`` mirrors :func:`save`: ``True``/``False`` force gzip on or off,
-    ``None`` (default) infers from the path suffix using the same rule.
+    ``.inif`` paths are read as indexed archives. JSON paths are read as plain
+    JSON. The old gzip ``compress`` override is no longer supported.
     """
     path = Path(path)
-    use_gzip = compress if compress is not None else _is_gzipped_path(path)
-    if use_gzip:
-        with gzip.open(path, "rt", encoding="utf-8") as f:
-            data = json.load(f)
-    else:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    _assert_json_or_indexed(path, compress)
+    if _is_indexed_path(path):
+        from inif.indexed import load_indexed
+
+        return load_indexed(path)
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
     return from_dict(data)

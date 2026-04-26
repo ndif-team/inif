@@ -31,14 +31,9 @@ def select_by_position(
     )
 
 
-def select_by_tag(sample: Sample, tag: str) -> TokenSelection:
-    tokens = []
-    positions = []
-    for i, t in enumerate(sample.tokens):
-        token_tags = getattr(t, "tags", [])
-        if tag in token_tags:
-            tokens.append(t)
-            positions.append(i)
+def select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection:
+    positions = sample.annotation_positions(annotation_name)
+    tokens = sample.get_tokens_by_positions(positions)
     return TokenSelection(
         sample_id=sample.id,
         tokens=tokens,
@@ -81,7 +76,7 @@ def filter_samples_by_score(
 ) -> list[Sample]:
     """Return samples whose ``scorer`` value satisfies ``predicate``.
 
-    Compose with the position selectors above (``select_by_tag`` etc.) on
+    Compose with the position selectors above (``select`` etc.) on
     each returned sample to drill down to specific tokens.
     """
     results: list[Sample] = []

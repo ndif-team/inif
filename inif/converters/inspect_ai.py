@@ -153,7 +153,7 @@ def _annotate_response_tokens(
     tag_generated: bool,
     extract_logprobs: bool,
 ) -> None:
-    """Tag the model's response tokens and attach per-token logprobs.
+    """Annotate the model's response tokens and attach per-token logprobs.
 
     Both behaviors require a HF tokenizer with ``apply_chat_template`` and a
     successful round-trip from tokens back to the formatted string. When that
@@ -172,8 +172,7 @@ def _annotate_response_tokens(
     start, end = rng
 
     if tag_generated:
-        for i in range(start, end):
-            sample.tokens[i].add_tag("generated")
+        sample.annotate("generated", [(start, end)], metadata={"source": "converter"})
 
     if extract_logprobs:
         logprobs = _extract_logprobs(inspect_sample)
@@ -218,7 +217,9 @@ def from_eval_log(
         include_messages: Whether to include message-level text segments.
         deduplicate: Whether to run sequence deduplication.
         min_sequence_length: Minimum length for common sequence detection.
-        tag_chat_roles: Whether to add 'role' extra field to tokens.
+        tag_chat_roles: Whether to record per-message chat-template roles
+            (``system``/``user``/``assistant``/``template``) on
+            ``Sample.annotations`` with ``metadata={"source": "message_role"}``.
         tag_generated: Whether to tag the model's response tokens with
             ``"generated"``. The response is the last assistant message.
         extract_logprobs: Whether to attach per-token logprobs from the eval
@@ -321,8 +322,8 @@ def from_eval_log(
                 output_tokens=output_toks,
             )
 
-            # Annotate response tokens BEFORE dedup so the per-token tags and
-            # logprobs become part of the extras that prevent collapsing.
+            # Annotate response tokens BEFORE dedup so generated ranges and
+            # logprobs prevent response-specific runs from collapsing.
             _annotate_response_tokens(
                 sample,
                 msg_dicts,

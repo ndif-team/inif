@@ -1,4 +1,3 @@
-import json
 import tempfile
 from pathlib import Path
 
@@ -66,9 +65,9 @@ def test_save_load_json(doc):
         assert doc2.samples[0].id == "sample_0"
 
 
-def test_save_load_gzip(doc):
+def test_save_load_inif_indexed_archive(doc):
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "test.inif.json.gz"
+        path = Path(tmpdir) / "test.inif"
         save(doc, path)
         doc2 = load(path)
 
@@ -76,21 +75,16 @@ def test_save_load_gzip(doc):
         assert len(doc2.samples) == 1
 
 
-def test_save_force_compress(doc):
+def test_save_rejects_compress_override(doc):
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.inif.json"
-        save(doc, path, compress=True)
-        # File is gzip-compressed even without .gz extension
-        import gzip
-
-        with gzip.open(path, "rt") as f:
-            data = json.load(f)
-        assert data["metadata"]["model"]["name"] == "gpt2"
+        with pytest.raises(AssertionError, match="compress"):
+            save(doc, path, compress=True)
 
 
 def test_save_load_preserves_extra_fields():
     """Verify extra fields on Token survive round-trip serialization."""
-    tok = Token(id=1, token="hello", role="user", logprob=-0.5)
+    tok = Token(id=1, token="hello", source="user", logprob=-0.5)
     tok.set_extra("data", {"logit_lens": {"layer_0": {}}})
 
     from inif.models import Sample
@@ -106,7 +100,7 @@ def test_save_load_preserves_extra_fields():
         doc2 = load(path)
 
         t = doc2.samples[0].tokens[0]
-        assert t.get_extra("role") == "user"
+        assert t.get_extra("source") == "user"
         assert t.get_extra("logprob") == -0.5
         assert t.get_extra("data")["logit_lens"]["layer_0"] == {}
 
@@ -124,33 +118,29 @@ def test_sequence_ids_survive_save_load(doc):
         assert [t.token for t in s_reload.tokens] == [t.token for t in s_orig.tokens]
 
 
-def test_load_with_explicit_compress_override(doc):
-    """`load` accepts a `compress` override mirroring `save`."""
+def test_load_rejects_compress_override(doc):
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Save gzipped to a non-suffixed path.
-        path = Path(tmpdir) / "blob"
-        save(doc, path, compress=True)
-        # Without the hint, load tries plain JSON and chokes.
-        import gzip as _gzip
-
-        with pytest.raises(
-            (UnicodeDecodeError, json.JSONDecodeError, _gzip.BadGzipFile)
-        ):
-            load(path)
-        # With the explicit override it works.
-        doc2 = load(path, compress=True)
-        assert doc2.metadata.model.name == doc.metadata.model.name
+        path = Path(tmpdir) / "test.inif.json"
+        save(doc, path)
+        with pytest.raises(AssertionError, match="compress"):
+            load(path, compress=False)
 
 
-def test_save_load_compress_false_override(doc):
-    """`compress=False` forces plain text even on a .gz path."""
+def test_gzip_suffix_is_rejected(doc):
+    """INIF now has two storage modes: plain JSON or indexed .inif archives."""
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.json.gz"
-        save(doc, path, compress=False)
-        # File is plain JSON despite the suffix.
-        assert path.read_text(encoding="utf-8").startswith("{")
-        doc2 = load(path, compress=False)
-        assert doc2.metadata.model.name == doc.metadata.model.name
+        with pytest.raises(AssertionError, match="gzip"):
+            save(doc, path)
+
+
+def test_inifx_suffix_is_rejected(doc):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "test.inifx"
+        with pytest.raises(AssertionError, match="inifx"):
+            save(doc, path)
+        with pytest.raises(AssertionError, match="inifx"):
+            load(path)
 
 
 def test_minimal_document():
@@ -170,5 +160,7 @@ def test_schema_documents_token_extras():
     schema = get_schema()
     assert "TokenExtras" in schema["$defs"]
     extras_props = schema["$defs"]["TokenExtras"]["properties"]
-    for key in ("tags", "role", "logprob", "logit_lens"):
+    for key in ("logprob", "logit_lens"):
         assert key in extras_props, f"Missing conventional extra: {key}"
+    assert "tags" not in extras_props
+    assert "role" not in extras_props

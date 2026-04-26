@@ -147,7 +147,8 @@ def main(argv: list[str] | None = None) -> None:
     # view subcommand
     view_parser = subparsers.add_parser("view", help="View inif file as HTML")
     view_parser.add_argument(
-        "input", help="Input inif file (.inif.json, .inif.json.gz, or .inif)"
+        "input",
+        help="Input inif file (.inif.json or .inif)",
     )
     view_parser.add_argument(
         "-o", "--output", help="Output HTML path (opens browser if omitted)"
@@ -183,7 +184,7 @@ def main(argv: list[str] | None = None) -> None:
     eval_parser.add_argument(
         "--no-tag-chat-roles",
         action="store_true",
-        help="Don't add role tags to tokens",
+        help="Don't add chat-role annotations",
     )
     eval_parser.add_argument("--no-dedup", action="store_true", help="Skip dedup")
     eval_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose")
@@ -224,7 +225,7 @@ def main(argv: list[str] | None = None) -> None:
     eee_parser.add_argument(
         "--no-tag-chat-roles",
         action="store_true",
-        help="Don't add role tags to tokens",
+        help="Don't add chat-role annotations",
     )
     eee_parser.add_argument("--no-dedup", action="store_true", help="Skip dedup")
 

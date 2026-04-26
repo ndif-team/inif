@@ -99,10 +99,16 @@ def _has_extra_fields(token: Token) -> bool:
 def _clean_pairs(sample: Sample) -> list[tuple[str, int]]:
     """Project a sample's tokens to (string, id) pairs, dropping refs and tokens
     with extras. This matches the projection used by ``_find_common_contiguous``."""
+    annotated_positions = set()
+    for annotation in sample.annotations:
+        for start, end in annotation.ranges:
+            annotated_positions.update(range(start, end))
     return [
         (t.token or "", t.id)
-        for t in sample.tokens
-        if not t.is_sequence_ref and not _has_extra_fields(t)
+        for i, t in enumerate(sample.tokens)
+        if i not in annotated_positions
+        and not t.is_sequence_ref
+        and not _has_extra_fields(t)
     ]
 
 
@@ -123,7 +129,8 @@ def _capture_ids_for_sequence(sample: Sample, seq_strs: list[str]) -> list[int] 
 def _replace_sequences_in_tokens(
     tokens: list[Token],
     sequences: list[Sequence],
-) -> list[Token]:
+    blocked_positions: set[int] | None = None,
+) -> tuple[list[Token], list[tuple[int, int]]]:
     """Greedy longest-match replacement of token sequences with refs.
 
     A window is only replaced when both the token strings AND ids match the
@@ -134,7 +141,9 @@ def _replace_sequences_in_tokens(
     case (no match) is O(1) per token instead of O(n_sequences).
     """
     if not sequences:
-        return list(tokens)
+        return list(tokens), [(i, i + 1) for i in range(len(tokens))]
+
+    blocked_positions = blocked_positions or set()
 
     # Sort descending by length so longer matches win over shorter ones that
     # share a prefix.
@@ -154,19 +163,24 @@ def _replace_sequences_in_tokens(
         first_index.setdefault((toks[0], ids[0]), []).append(idx)
 
     new_tokens: list[Token] = []
+    old_to_new: list[tuple[int, int]] = []
     n = len(tokens)
     i = 0
     while i < n:
         tok = tokens[i]
         # Ref tokens and extras-carrying tokens never start a match.
-        if tok.is_sequence_ref or _has_extra_fields(tok):
+        if i in blocked_positions or tok.is_sequence_ref or _has_extra_fields(tok):
+            new_pos = len(new_tokens)
             new_tokens.append(tok)
+            old_to_new.append((new_pos, new_pos + 1))
             i += 1
             continue
         key = (tok.token, tok.id)
         candidates = first_index.get(key)
         if not candidates:
+            new_pos = len(new_tokens)
             new_tokens.append(tok)
+            old_to_new.append((new_pos, new_pos + 1))
             i += 1
             continue
 
@@ -179,21 +193,45 @@ def _replace_sequences_in_tokens(
             ok = True
             for j in range(seq_len):
                 w = tokens[i + j]
-                if w.is_sequence_ref or _has_extra_fields(w):
+                if (i + j) in blocked_positions or w.is_sequence_ref or _has_extra_fields(w):
                     ok = False
                     break
                 if w.token != seq_toks[j] or w.id != seq_ids[j]:
                     ok = False
                     break
             if ok:
+                new_pos = len(new_tokens)
                 new_tokens.append(Token(id=-1, sequence_id=seq.id))
+                for _ in range(seq_len):
+                    old_to_new.append((new_pos, new_pos + 1))
                 i += seq_len
                 matched = True
                 break
         if not matched:
+            new_pos = len(new_tokens)
             new_tokens.append(tok)
+            old_to_new.append((new_pos, new_pos + 1))
             i += 1
-    return new_tokens
+    return new_tokens, old_to_new
+
+
+def _annotation_positions(sample: Sample) -> set[int]:
+    positions: set[int] = set()
+    for annotation in sample.annotations:
+        for start, end in annotation.ranges:
+            positions.update(range(start, end))
+    return positions
+
+
+def _remap_sample_annotations(
+    sample: Sample,
+    old_to_new: list[tuple[int, int]],
+) -> None:
+    for annotation in sample.annotations:
+        ranges: list[tuple[int, int]] = []
+        for start, end in annotation.ranges:
+            ranges.append((old_to_new[start][0], old_to_new[end - 1][1]))
+        annotation.ranges = ranges
 
 
 def deduplicate_sequences(
@@ -255,14 +293,16 @@ def deduplicate_sequences(
 
     all_sequences = list(doc.sequences) + new_sequences
 
-    new_samples = [
-        sample.model_copy(
-            update={
-                "tokens": _replace_sequences_in_tokens(sample.tokens, all_sequences)
-            }
+    new_samples = []
+    for sample in doc.samples:
+        tokens, old_to_new = _replace_sequences_in_tokens(
+            sample.tokens,
+            all_sequences,
+            blocked_positions=_annotation_positions(sample),
         )
-        for sample in doc.samples
-    ]
+        new_sample = sample.model_copy(update={"tokens": tokens}, deep=True)
+        _remap_sample_annotations(new_sample, old_to_new)
+        new_samples.append(new_sample)
 
     return doc.model_copy(update={"samples": new_samples, "sequences": all_sequences})
 
@@ -270,7 +310,10 @@ def deduplicate_sequences(
 def expand_sequences(doc: InifDocument) -> InifDocument:
     """Expand all sequence references back to flat tokens with original ids.
 
-    Returns a new document whose tokens are independent from ``doc``.
+    Returns a new document whose tokens are independent from ``doc``. The
+    returned document drops the sequence list and emits each materialised
+    token as a plain vocab token (no ``sequence_id`` provenance) — running
+    ``deduplicate_sequences`` again will rediscover the same shared runs.
     """
     doc = doc.model_copy(deep=True)
     seq_map = doc.sequence_map
@@ -278,9 +321,12 @@ def expand_sequences(doc: InifDocument) -> InifDocument:
     new_samples: list[Sample] = []
     for sample in doc.samples:
         new_tokens: list[Token] = []
+        old_to_new: list[tuple[int, int]] = []
         for token in sample.tokens:
+            new_start = len(new_tokens)
             if not token.is_sequence_ref:
                 new_tokens.append(token)
+                old_to_new.append((new_start, len(new_tokens)))
                 continue
             assert token.sequence_id is not None, (
                 "Sequence ref token must have sequence_id"
@@ -290,7 +336,10 @@ def expand_sequences(doc: InifDocument) -> InifDocument:
             )
             seq = seq_map[token.sequence_id]
             for t in seq.tokens:
-                new_tokens.append(Token(id=t.id, token=t.token, sequence_id=seq.id))
-        new_samples.append(sample.model_copy(update={"tokens": new_tokens}))
+                new_tokens.append(Token(id=t.id, token=t.token))
+            old_to_new.append((new_start, len(new_tokens)))
+        new_sample = sample.model_copy(update={"tokens": new_tokens}, deep=True)
+        _remap_sample_annotations(new_sample, old_to_new)
+        new_samples.append(new_sample)
 
-    return doc.model_copy(update={"samples": new_samples})
+    return doc.model_copy(update={"samples": new_samples, "sequences": []})

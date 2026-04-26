@@ -2,7 +2,7 @@
 
 *This package is in early development and the API may change without deprecation. Feedback and contributions are very welcome!*
 
-The **INterpretability Interchange Format** (INIF) is a JSON-based format for tokenized LLM generation traces with support for tagging, position selection, and support for efficient storing interpretability outputs.
+The **INterpretability Interchange Format** (INIF) is a JSON-based format for tokenized LLM generation traces with support for contiguous token annotations, position selection, and efficient storage of interpretability outputs.
 
 Designed as the interchange layer between generation and evaluation frameworks (e.g. [Inspect AI](https://inspect.ai-safety-institute.org.uk/)) and interpretability tools in the NDIF ecosystem ([nnsight](https://github.com/ndif-team/nnsight), [nnterp](https://github.com/ndif-team/nnterp) and [workbench](https://github.com/ndif-team/workbench)).
 
@@ -73,7 +73,8 @@ InifDocument
 ├── metadata          — model info, source eval, packages, timestamps
 ├── sequences[]       — deduplicated token patterns shared across samples
 └── samples[]         — tokenized generation traces
-    ├── tokens[]      — token id + string, plus extra fields (tags, role, logprob, data, ...)
+    ├── tokens[]      — token id + string, plus sparse extras (logprob, logit lens, probes, ...)
+    ├── annotations[] — named token ranges with optional metadata
     ├── texts[]       — original message strings
     ├── spans[]       — named position ranges
     └── scores[]      — evaluation scores (scorer, value, answer)
@@ -81,31 +82,69 @@ InifDocument
 
 **Token ID convention**: `id >= 0` is a vocabulary token, `id == -N` references a shared `Sequence` via `sequence_id`.
 
-**Extensible tokens**: tags, logprobs, chat roles, and interpretability outputs (logit lens, probes, etc.) are stored as extra fields on each token.
+**Annotations**: repeated labels such as chat roles, generated output, reasoning traces, and regex matches live in `Sample.annotations` as named half-open ranges. This avoids repeating `"role": "assistant"` or `"tags": [...]` on every token in a long contiguous region.
+
+**Extensible tokens**: sparse per-token values such as logprobs and interpretability outputs (logit lens, probes, etc.) are stored as token extras.
+
+Use `.inif.json` for plain JSON and `.inif` for the indexed archive format. The
+archive keeps per-sample text previews in the manifest and stores each full
+sample payload as a separate compressed member, so callers can browse summaries
+without inflating token dictionaries:
+
+```python
+from inif import (
+    IndexedInifWriter,
+    iter_indexed_samples,
+    read_indexed_header,
+    read_indexed_sample,
+    read_indexed_samples,
+    read_indexed_sample_summaries,
+    save,
+)
+
+save(doc, "traces.inif")                     # indexed archive
+header = read_indexed_header("traces.inif")  # metadata + sequences only
+summaries = read_indexed_sample_summaries("traces.inif")
+sample = read_indexed_sample("traces.inif", "sample_42")
+subset = read_indexed_samples("traces.inif", ["sample_1", "sample_7"])
+
+for sample in iter_indexed_samples("traces.inif"):
+    ...
+
+with IndexedInifWriter("streaming.inif", doc.metadata, doc.sequences) as writer:
+    for sample in doc.samples:
+        writer.write_sample(sample)
+        writer.flush()  # make the partial archive readable
+```
+
+The archive stores metadata and sequences once, then stores each sample as a
+separate compressed member with an uncompressed preview summary. This supports
+incremental writes, header-only reads, per-sample random access, and streaming
+iteration while preserving the same `InifDocument` model.
 
 ## Key features
 
-### Tagging
+### Annotation
 
 ```python
 from inif import tag_by_regex_all, tag_by_text_regex, create_span_from_tag
 
-# Tag tokens matching a regex pattern
+# Annotate tokens matching a regex pattern
 tag_by_regex_all(doc, r"^\d+$", "number")
 
-# Tag by concatenated text (multi-token matches)
+# Annotate by concatenated text (multi-token matches)
 tag_by_text_regex(sample, r"Paris", "city")
 
-# Convert tags to named spans
+# Convert annotations to named spans
 create_span_from_tag(sample, "city", "answer_span")
 ```
 
 ### Selection
 
 ```python
-from inif import select_by_tag, select_by_span, select_by_position
+from inif import select_by_annotation, select_by_span, select_by_position
 
-selection = select_by_tag(sample, "number")
+selection = select_by_annotation(sample, "number")
 selection = select_by_span(sample, "answer_span")
 selection = select_by_position(sample, slice(5, 10))
 ```
@@ -127,7 +166,7 @@ expand_sequences(doc)                     # flatten back
 
 - Collapsible sidebar with sample list and pass/fail indicators
 - Token-level display with hover tooltips showing all extra fields
-- Toggleable role and tag highlighting with color legends
+- Toggleable annotation highlighting with color legends
 - Span border annotations and extra-field underline indicators
 - Newline-aware token wrapping
 

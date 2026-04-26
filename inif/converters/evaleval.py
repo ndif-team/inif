@@ -5,8 +5,8 @@ The EEE schema (``instance_level_eval_0.2.2``) is the interchange format used
 by the `EEE_datastore <https://huggingface.co/datasets/evaleval/EEE_datastore>`_
 HuggingFace dataset, which bundles traces from Inspect AI, HELM, and
 lm-eval-harness under a shared schema. This module accepts that schema as
-the source of truth and produces INIF documents whose tokenization, role
-tags, and deduplication match the Inspect converter's conventions.
+the source of truth and produces INIF documents whose tokenization,
+annotations, and deduplication match the Inspect converter's conventions.
 
 Three entry points:
 
@@ -246,12 +246,14 @@ def _tag_message_prefix_span(
     if char_start is None or char_end is None:
         return False
 
+    positions: list[int] = []
     pos = 0
     for i, s in enumerate(decoded):
         s_start, s_end = pos, pos + len(s)
         if s_end > char_start and s_start < char_end:
-            sample.tokens[i].add_tag(tag)
+            positions.append(i)
         pos = s_end
+    sample.annotate_positions(tag, positions, metadata={"source": "reasoning_trace"})
     return True
 
 
@@ -299,9 +301,9 @@ def from_instance_records(
         include_messages: Include message texts on each ``Sample``.
         deduplicate: Run sequence deduplication over the produced samples.
         min_sequence_length: Minimum length for common-sequence detection.
-        tag_chat_roles: Add ``role`` extras to tokens via character-span matching.
-        tag_generated: Tag the last assistant message's tokens with ``"generated"``.
-        tag_reasoning: Tag tokens overlapping the reasoning-trace span with
+        tag_chat_roles: Add role annotations via character-span matching.
+        tag_generated: Annotate the last assistant message's tokens with ``"generated"``.
+        tag_reasoning: Annotate tokens overlapping the reasoning-trace span with
             ``"reasoning"``. Best-effort: silently skipped when the token stream
             doesn't round-trip cleanly to the formatted chat template.
 
@@ -378,8 +380,9 @@ def from_instance_records(
                 sample.tokens, msg_dicts, tokenizer, role="assistant", which="last"
             )
             if rng is not None:
-                for i in range(rng[0], rng[1]):
-                    sample.tokens[i].add_tag("generated")
+                sample.annotate(
+                    "generated", [rng], metadata={"source": "converter"}
+                )
 
         if tag_reasoning:
             for msg_index, reasoning in _reasoning_spans_for_record(record):

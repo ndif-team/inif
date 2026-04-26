@@ -11,8 +11,8 @@ def get_schema() -> dict:
 
     The ``Token`` model permits arbitrary extra fields. ``TokenExtras`` is
     embedded under ``$defs`` purely as documentation of well-known names
-    (``tags``, ``role``, ``logprob``, ``logit_lens``) so external validators,
-    UIs, and viewers know what to expect.
+    (``logprob``, ``logit_lens``) so external validators, UIs, and viewers know
+    what to expect. Repeated token labels live in ``Sample.annotations``.
     """
     schema = InifDocument.model_json_schema()
     defs = schema.setdefault("$defs", {})

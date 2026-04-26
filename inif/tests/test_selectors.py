@@ -8,10 +8,10 @@ from inif.models import (
 )
 from inif.selectors import (
     filter_samples_by_score,
+    select_by_annotation,
     select_by_position,
     select_by_sequence_id,
     select_by_span,
-    select_by_tag,
 )
 
 
@@ -33,14 +33,14 @@ def test_select_by_position_slice(sample_flat):
     assert sel.positions == [0, 1, 2]
 
 
-def test_select_by_tag(sample):
-    sel = select_by_tag(sample, "content")
+def test_select_by_annotation(sample):
+    sel = select_by_annotation(sample, "content")
     assert len(sel.tokens) == 1
     assert sel.positions == [2]  # index in sample.tokens list
 
 
-def test_select_by_tag_no_match(sample):
-    sel = select_by_tag(sample, "nonexistent")
+def test_select_by_annotation_no_match(sample):
+    sel = select_by_annotation(sample, "nonexistent")
     assert len(sel.tokens) == 0
 
 
