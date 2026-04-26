@@ -34,8 +34,10 @@ Research-oriented library. Follow nnterp conventions:
 - `tagging.py` — Regex-based auto-tagging, span creation
 - `sequences.py` — Sequence deduplication (lmout-style set-intersection) and expansion
 - `converters/inspect_ai.py` — Inspect AI EvalLog converter
+- `converters/evaleval.py` — every_eval_ever (EEE) instance-level → `InifDocument`
+- `converters/_tokenize.py` — shared `apply_chat_template` → `Token` helpers (used by both eval converters)
 - `converters/text.py` — Raw text file / string processing
-- `cli.py` — CLI entry point (`inif convert txt`, `inif convert eval`)
+- `cli.py` — CLI entry point (`inif convert txt`, `inif convert eval`, `inif convert evaleval`)
 
 ## Key Conventions
 
@@ -48,6 +50,7 @@ Research-oriented library. Follow nnterp conventions:
 - **Sequence**: stores both `tokens: list[str]` and `ids: list[int]` (parallel arrays). Required so dedup → expand round-trips preserve real vocabulary IDs even after a sample has been compressed and later materialized.
 - **Sample.id**: always `str`. A `@field_validator(mode="before")` coerces ints (Inspect AI uses int sample ids by default).
 - **Sample.spans**: validated against `len(tokens)` at construction; out-of-range positions raise `ValidationError`.
+- **Sample first-class fields aligned with EEE**: `target` (singleton convenience), `references: list[str]` (full ground-truth list), `choices: list[str] | None` (MCQ options), `interaction_type: str | None` (`"single_turn"` / `"multi_turn"` / `"agentic"`), `error: str | None` (API timeouts, refusals, etc.), `sample_hash: str | None` (cross-model comparison key). These used to live under `Sample.metadata` for the evaleval converter; they are now top-level so filters / viewers / downstream tools can rely on them without key archaeology.
 - **Sample.materialize_position(expanded_pos, sequences)**: expands the containing sequence ref in-place when `expanded_pos` falls inside one, returning `(actual_index, real_token)`. Other refs and other samples are left untouched.
 - **InifDocument.total_samples**: computed property (`len(samples)`) — there is no stored field.
 - **InifDocument.subset(predicate)**: returns a new doc with only matching samples; sequences not referenced by the kept samples are pruned (self-contained sub-document).
@@ -56,11 +59,28 @@ Research-oriented library. Follow nnterp conventions:
 - **Metadata.created_at**: `datetime` (pydantic auto-parses ISO strings on load; `to_dict` uses `mode="json"` to emit ISO strings).
 - **Deduplication**: finds token sequences common to ALL samples via set-intersection of contiguous n-grams; replacement requires both the token strings AND ids to match.
 
+## Tokenizer resolution (Inspect + evaleval)
+
+- **Always present**: tokens are a load-bearing INIF invariant — there is no way to opt out of tokenization at the converter level.
+- **Default `tokenizer="auto"`** (and the alias `tokenizer=None`): both converters read the source's model id (`eval_log.eval.model` for Inspect, `record["model_id"]` / aggregate fallback for evaleval), strip routing prefixes (`together/`, `hf/`, `bedrock/`, …) via the `_KNOWN_PROVIDERS` allowlist, and call `AutoTokenizer.from_pretrained(canonical_id, trust_remote_code=True)`. Raises `ValueError` if the id is missing or unloadable (closed-source ids like `openai/gpt-4` will hit this — the error message tells the user to pass an HF stand-in).
+- **Explicit string / instance**: still loaded / used, but compared against the source's model id via the same prefix-stripping comparison; on mismatch a `UserWarning` is emitted (`"Tokenizer mismatch: …"`). The mismatch may be intentional (forcing one model's tokens through another's tokenizer for cross-model studies); the warning just keeps users informed.
+- The shared resolver lives in `inif/converters/_tokenize.py::resolve_tokenizer` and is imported by both `from_eval_log` (Inspect) and `from_instance_records` (evaleval).
+
 ## Inspect AI converter conventions
 
 - **`tag_generated=True`** (default): tokens belonging to the LAST assistant message are tagged `"generated"`. Identification uses character-span matching against `apply_chat_template` output, so it works for any HuggingFace chat template.
 - **`extract_logprobs=True`** (default): per-token logprobs from `inspect_sample.output.choices[0].logprobs.content` are attached to the response tokens via `set_extra("logprob", ...)`. Best-effort: skipped silently when the eval-source tokenization disagrees with our tokenizer on token count.
 - **`filter_samples_by_score(doc, scorer, predicate)`** returns `list[Sample]` (compose with the position selectors). The old `select_by_score` is gone.
+
+## Evaleval converter conventions
+
+- **Schema**: targets `instance_level_eval_0.2.2` from `evaleval/every_eval_ever`. Trusted as-is — users who want jsonschema validation should run it themselves against the upstream schema before calling the converter.
+- **Three entry points** in `inif/converters/evaleval.py`: `from_instance_records(records, aggregate=None, ...)` (core), `from_eval_json(aggregate_path, instances_path, ...)` (local JSON / JSONL), `from_hf_dataset(config, split="samples", aggregate_config=None, limit=None, ...)` (streams rows from `evaleval/EEE_datastore`).
+- **Interaction types**: `single_turn` synthesises `user` + `assistant` messages; `multi_turn` / `agentic` use the `messages[]` array directly, ordered by `turn_idx`. `tool_calls` are rendered into assistant content as `<tool_call name=… args={…}/>` so the invocations survive tokenization.
+- **Reasoning traces**: when `tag_reasoning=True` (default), reasoning-trace tokens are char-span tagged with `"reasoning"`. Best-effort: silently skipped when the tokenizer's per-token decode doesn't round-trip to `apply_chat_template`.
+- **Score**: `SampleScore` is built from `evaluation.score` (`scorer = evaluation_name`). The terminal `answer_attribution` entry feeds `SampleScore.answer`; non-terminal entries land in `Sample.metadata["intermediate_answers"]`.
+- **Metadata mapping**: `token_usage.input_tokens`/`output_tokens` → `Sample.input_tokens`/`output_tokens`; `input.reference` → `Sample.references` (+ `Sample.target` when length 1); `input.choices` → `Sample.choices`; `interaction_type`, `error`, `sample_hash` → same-named first-class `Sample` fields. `performance`, `num_turns`, `tool_calls_count`, `reasoning_tokens`, per-sample EEE `metadata`, non-terminal `answer_attribution` entries → `Sample.metadata`. Aggregate record (when supplied) contributes `Metadata.extra["inference"]`, `["eval_library"]`, `["metric_config"]`, `["aggregate_score"]`.
+- **Optional extra**: `pip install inif[evaleval]` pulls `datasets` (imported lazily inside `from_hf_dataset`).
 
 ## IO conventions
 

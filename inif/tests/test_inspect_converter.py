@@ -194,7 +194,7 @@ def test_from_eval_log_basic():
     sample = _make_sample(messages, scores=scores, target="4", sample_id="q1")
     log = _make_eval_log(samples=[sample])
 
-    doc = from_eval_log(log, deduplicate=False)
+    doc = from_eval_log(log, tokenizer=_chat_tokenizer(), deduplicate=False)
     assert doc.metadata.model.name == "gpt2"
     assert doc.metadata.source_eval.framework == "inspect_ai"
     assert doc.total_samples == 1
@@ -211,7 +211,7 @@ def test_from_eval_log_basic():
 
 def test_from_eval_log_no_samples():
     log = _make_eval_log(samples=[])
-    doc = from_eval_log(log, deduplicate=False)
+    doc = from_eval_log(log, tokenizer=_chat_tokenizer(), deduplicate=False)
     assert doc.total_samples == 0
     assert len(doc.samples) == 0
 
@@ -494,6 +494,6 @@ def test_from_eval_log_usage():
         usage=usage,
     )
     log = _make_eval_log(samples=[sample])
-    doc = from_eval_log(log, deduplicate=False)
+    doc = from_eval_log(log, tokenizer=_chat_tokenizer(), deduplicate=False)
     assert doc.samples[0].input_tokens == 50
     assert doc.samples[0].output_tokens == 10

@@ -163,6 +163,64 @@
           "default": null,
           "title": "Target"
         },
+        "references": {
+          "items": {
+            "type": "string"
+          },
+          "title": "References",
+          "type": "array"
+        },
+        "choices": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Choices"
+        },
+        "interaction_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interaction Type"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "sample_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Hash"
+        },
         "metadata": {
           "additionalProperties": true,
           "title": "Metadata",
@@ -285,35 +343,16 @@
           "title": "Id",
           "type": "string"
         },
-        "name": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Name"
-        },
-        "tokens": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Tokens",
-          "type": "array"
-        },
-        "ids": {
-          "items": {
-            "type": "integer"
-          },
-          "title": "Ids",
-          "type": "array"
-        },
         "n_tokens": {
           "title": "N Tokens",
           "type": "integer"
+        },
+        "tokens": {
+          "items": {
+            "$ref": "#/$defs/Token"
+          },
+          "title": "Tokens",
+          "type": "array"
         },
         "text": {
           "anyOf": [
@@ -330,9 +369,8 @@
       },
       "required": [
         "id",
-        "tokens",
-        "ids",
-        "n_tokens"
+        "n_tokens",
+        "tokens"
       ],
       "title": "Sequence",
       "type": "object"
@@ -450,10 +488,6 @@
     "Token": {
       "additionalProperties": true,
       "properties": {
-        "id": {
-          "title": "Id",
-          "type": "integer"
-        },
         "token": {
           "anyOf": [
             {
@@ -466,7 +500,7 @@
           "default": null,
           "title": "Token"
         },
-        "sequence_id": {
+        "seq_id": {
           "anyOf": [
             {
               "type": "string"
@@ -476,7 +510,11 @@
             }
           ],
           "default": null,
-          "title": "Sequence Id"
+          "title": "Seq Id"
+        },
+        "id": {
+          "title": "Id",
+          "type": "integer"
         }
       },
       "required": [
