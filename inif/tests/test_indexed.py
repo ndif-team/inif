@@ -4,7 +4,7 @@ import zipfile
 import pytest
 
 from inif.indexed import IndexedInifWriter, load_indexed, save_indexed
-from inif.io import iter_samples, load, read_info, read_samples, save
+from inif.io import iter_samples, read_info, read_samples
 from inif.models import (
     InifDocument,
     Metadata,
@@ -107,8 +107,8 @@ def test_save_load_dispatches_inif_suffix_to_indexed_archive(tmp_path):
     doc = _indexed_doc()
     path = tmp_path / "doc.inif"
 
-    save(doc, path)
-    loaded = load(path)
+    doc.save(path)
+    loaded = InifDocument.load(path)
 
     assert loaded.metadata.model.name == "indexed-test"
     assert [sample.id for sample in loaded.samples] == ["s0", "s1", "s2"]
@@ -173,7 +173,7 @@ def saved_doc_path(request, tmp_path):
     """Save the canonical fixture document under both supported suffixes."""
     doc = _indexed_doc()
     path = tmp_path / request.param
-    save(doc, path)
+    doc.save(path)
     return path
 
 

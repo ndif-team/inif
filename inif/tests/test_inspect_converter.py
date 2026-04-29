@@ -10,7 +10,6 @@ from inif.converters.inspect_ai import (
     _messages_to_tokens,
     from_eval_log,
 )
-from inif.selectors import select_by_annotation
 
 
 def _make_eval_log(
@@ -290,18 +289,65 @@ def test_extract_message_dicts():
         _make_message("system", "Be helpful."),
         _make_message("user", "Hello!"),
     ]
-    dicts = _extract_message_dicts(messages)
+    dicts, reasoning = _extract_message_dicts(messages)
     assert len(dicts) == 2
     assert dicts[0] == {"role": "system", "content": "Be helpful."}
     assert dicts[1] == {"role": "user", "content": "Hello!"}
+    assert reasoning == [None, None]
 
 
 def test_extract_message_dicts_list_content():
     """_extract_message_dicts handles list content (ContentText objects)."""
     part = SimpleNamespace(text="Part 1")
     msg = _make_message("user", [part])
-    dicts = _extract_message_dicts([msg])
+    dicts, reasoning = _extract_message_dicts([msg])
     assert dicts[0]["content"] == "Part 1"
+    assert reasoning == [None]
+
+
+def test_extract_message_dicts_reasoning_part():
+    """``ContentReasoning`` parts route through ``reasoning_content`` so the
+    chat template (not ``content`` concatenation) decides where to render
+    the reasoning."""
+    reasoning_part = SimpleNamespace(type="reasoning", reasoning="<think>step</think>")
+    text_part = SimpleNamespace(text="answer")
+    msg = _make_message("assistant", [reasoning_part, text_part])
+    dicts, reasoning = _extract_message_dicts([msg])
+    assert dicts[0]["content"] == "answer"
+    assert dicts[0]["reasoning"] == "<think>step</think>"
+    assert dicts[0]["reasoning_content"] == "<think>step</think>"
+    assert reasoning == ["<think>step</think>"]
+
+
+def test_extract_message_dicts_propagates_tool_calls():
+    """Inspect ``ToolCall`` objects surface in OpenAI-shaped ``tool_calls``
+    on the message dict — required for chat templates (e.g. Kimi) that route
+    assistant messages with tool calls into the suffix where reasoning is
+    preserved."""
+    tc = SimpleNamespace(
+        id="call_0",
+        function="search",
+        arguments={"q": "x"},
+        type="function",
+    )
+    msg = SimpleNamespace(role="assistant", content="text", tool_calls=[tc])
+    dicts, _ = _extract_message_dicts([msg])
+    assert dicts[0]["tool_calls"] == [
+        {
+            "id": "call_0",
+            "type": "function",
+            "function": {"name": "search", "arguments": {"q": "x"}},
+        }
+    ]
+
+
+def test_extract_message_dicts_propagates_tool_message_id():
+    msg = SimpleNamespace(
+        role="tool", content="result", tool_call_id="call_0", function="search"
+    )
+    dicts, _ = _extract_message_dicts([msg])
+    assert dicts[0]["tool_call_id"] == "call_0"
+    assert dicts[0]["name"] == "search"
 
 
 def test_from_eval_log_chat_roles():
@@ -346,7 +392,13 @@ def test_from_eval_log_chat_roles():
 
 
 def _chat_tokenizer():
-    """Char-level chat tokenizer used by the generated/logprob tests."""
+    """Char-level chat tokenizer used by the generated/logprob tests.
+
+    Mimics Kimi/Qwen-style native reasoning rendering by wrapping any
+    ``reasoning_content`` / ``reasoning`` field in ``<think>…</think>``
+    before the message's content, so the reasoning span shows up where
+    a real reasoning-aware chat template would put it.
+    """
 
     class ChatTokenizer:
         def apply_chat_template(
@@ -360,7 +412,10 @@ def _chat_tokenizer():
             parts = ["<s>"]
             for msg in messages:
                 parts.append(f"[{msg['role']}]")
-                parts.append(msg["content"])
+                rc = msg.get("reasoning_content") or msg.get("reasoning") or ""
+                if rc:
+                    parts.append(f"<think>{rc}</think>")
+                parts.append(msg.get("content", ""))
                 parts.append(f"[/{msg['role']}]")
             formatted = "".join(parts)
             if not tokenize:
@@ -389,7 +444,7 @@ def test_from_eval_log_tags_generated_tokens():
         tag_chat_roles=False,
         tag_generated=True,
     )
-    tagged = select_by_annotation(doc.samples[0], "generated").tokens
+    tagged = doc.samples[0].select_by_annotation("generated").tokens
     # "Hello!" = 6 chars = 6 tokens
     assert len(tagged) == 6
     assert "".join(t.token for t in tagged) == "Hello!"
@@ -413,6 +468,127 @@ def test_from_eval_log_tag_generated_disabled():
         tag_generated=False,
     )
     assert doc.samples[0].annotation_positions("generated") == []
+
+
+def test_from_eval_log_tags_reasoning_blocks():
+    """The diff-based tagger detects reasoning-content rendering by rendering
+    the chat template with vs without the field — the diff is what the
+    template emits FOR that field. For Kimi/Qwen-style ``<think>{rc}</think>``
+    wrappers, only the inner content (``rc``) is in the diff window since
+    the wrapper is template-emitted regardless of the field's value."""
+    reasoning = SimpleNamespace(type="reasoning", reasoning="<think>plan</think>")
+    answer = SimpleNamespace(text="Hello!")
+    msg = _make_message("assistant", [reasoning, answer])
+    sample_in = _make_sample([_make_message("user", "Hi"), msg], sample_id="q1")
+    log = _make_eval_log(samples=[sample_in])
+
+    doc = from_eval_log(
+        log,
+        tokenizer=_chat_tokenizer(),
+        deduplicate=False,
+        tag_chat_roles=False,
+        tag_generated=False,
+        tag_reasoning=True,
+    )
+    sample = doc.samples[0]
+
+    reasoning_pos = sample.annotation_positions("reasoning")
+    reasoning_text = "".join(sample.tokens[p].token for p in reasoning_pos)
+    # The fake tokenizer wraps reasoning conditionally (`if rc:`), so removing
+    # the field strips both the source's embedded `<think>plan</think>` AND
+    # the wrapper. The diff is the entire double-wrapped block — exactly what
+    # the template emits because of this field.
+    assert reasoning_text == "<think><think>plan</think></think>"
+
+
+def test_from_eval_log_tags_tool_call_blocks():
+    """Tool-call rendering is detected via the same diff approach, and
+    tagged as ``tool_call`` + ``assistant`` (moved out of ``template``)."""
+
+    class ToolCallTokenizer:
+        all_special_ids: list[int] = []
+
+        def apply_chat_template(
+            self,
+            messages,
+            tokenize=True,
+            add_generation_prompt=False,
+            return_dict=False,
+            **kwargs,
+        ):
+            parts = ["<s>"]
+            for m in messages:
+                parts.append(f"[{m['role']}]")
+                rc = m.get("reasoning_content") or m.get("reasoning") or ""
+                if rc:
+                    parts.append(f"<think>{rc}</think>")
+                parts.append(m.get("content", ""))
+                tcs = m.get("tool_calls") or []
+                if tcs:
+                    parts.append("<TC>")
+                    for tc in tcs:
+                        parts.append(f"[{tc['function']['name']}]")
+                    parts.append("</TC>")
+                parts.append(f"[/{m['role']}]")
+            formatted = "".join(parts)
+            if not tokenize:
+                return formatted
+            return [ord(c) for c in formatted]
+
+        def decode(self, ids, skip_special_tokens=False):
+            return "".join(chr(i) for i in ids)
+
+    tc = SimpleNamespace(
+        id="c0", function="search", arguments={"q": "hi"}, type="function"
+    )
+    msg = SimpleNamespace(
+        role="assistant",
+        content="ok",
+        tool_calls=[tc],
+    )
+    sample_in = _make_sample([_make_message("user", "Hi"), msg], sample_id="q1")
+    log = _make_eval_log(samples=[sample_in])
+
+    doc = from_eval_log(
+        log,
+        tokenizer=ToolCallTokenizer(),
+        deduplicate=False,
+        tag_chat_roles=True,
+        tag_generated=False,
+        tag_reasoning=True,
+    )
+    sample = doc.samples[0]
+
+    tool_call_pos = sample.annotation_positions("tool_call")
+    rendered_tc = "".join(sample.tokens[p].token for p in tool_call_pos)
+    # Diff is the entire <TC>...</TC> block (only emitted when tool_calls
+    # is present).
+    assert rendered_tc == "<TC>[search]</TC>"
+
+    # Those positions also moved into the `assistant` chat-role annotation.
+    assistant_pos = set(sample.annotation_positions("assistant"))
+    assert set(tool_call_pos) <= assistant_pos
+    # ... and out of the `template` annotation.
+    template_pos = set(sample.annotation_positions("template"))
+    assert set(tool_call_pos).isdisjoint(template_pos)
+
+
+def test_from_eval_log_tag_reasoning_disabled():
+    reasoning = SimpleNamespace(type="reasoning", reasoning="<think>plan</think>")
+    answer = SimpleNamespace(text="Hello!")
+    msg = _make_message("assistant", [reasoning, answer])
+    sample_in = _make_sample([_make_message("user", "Hi"), msg], sample_id="q1")
+    log = _make_eval_log(samples=[sample_in])
+
+    doc = from_eval_log(
+        log,
+        tokenizer=_chat_tokenizer(),
+        deduplicate=False,
+        tag_chat_roles=False,
+        tag_generated=False,
+        tag_reasoning=False,
+    )
+    assert doc.samples[0].annotation_positions("reasoning") == []
 
 
 def test_from_eval_log_attaches_logprobs():
@@ -443,7 +619,7 @@ def test_from_eval_log_attaches_logprobs():
         tag_generated=True,
         extract_logprobs=True,
     )
-    generated = select_by_annotation(doc.samples[0], "generated").tokens
+    generated = doc.samples[0].select_by_annotation("generated").tokens
     assert len(generated) == 6
     expected = [-0.1 * (i + 1) for i in range(6)]
     assert [t.get_extra("logprob") for t in generated] == expected

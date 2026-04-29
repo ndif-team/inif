@@ -8,32 +8,15 @@ from inif.models import InifDocument, Sample, TokenOrSeqRef
 
 @dataclass
 class TokenSelection:
-    """A subset of tokens from a single sample, returned by every selector.
-
-    ``positions`` always reflects the actual sample-local indices (sorted,
-    deduplicated). ``tokens`` is the parallel list of :class:`Token`
-    objects pulled from those positions.
-    """
-
     sample_id: str | int
     tokens: list[TokenOrSeqRef] = field(default_factory=list)
     positions: list[int] = field(default_factory=list)
 
 
-def select_by_position(
+def _select_by_position(
     sample: Sample, positions: int | list[int] | slice
 ) -> TokenSelection:
-    """Select tokens by sample-local position.
-
-    Args:
-        sample: The sample to select from.
-        positions: A single index, a list of indices, or a ``slice``. Slices
-            are resolved against ``len(sample.tokens)`` via ``slice.indices``,
-            so negative starts behave like Python's normal slicing.
-
-    Returns:
-        A :class:`TokenSelection` whose ``positions`` are sorted and unique.
-    """
+    """Implementation backing :meth:`Sample.select_by_position`."""
     n = len(sample.tokens)
     if isinstance(positions, int):
         positions = [positions]
@@ -49,19 +32,8 @@ def select_by_position(
     )
 
 
-def select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection:
-    """Select every token covered by an annotation with the given name.
-
-    Positions are flattened across all the ranges of every matching
-    annotation, so this works whether the annotation has one range or many.
-
-    Args:
-        sample: The sample to select from.
-        annotation_name: The annotation name to match.
-
-    Returns:
-        A :class:`TokenSelection` with positions sorted ascending.
-    """
+def _select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection:
+    """Implementation backing :meth:`Sample.select_by_annotation`."""
     positions = sample.annotation_positions(annotation_name)
     tokens = sample.get_tokens_by_positions(positions)
     return TokenSelection(
@@ -71,19 +43,12 @@ def select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection
     )
 
 
-def select_by_sequence_id(sample: Sample, seq_id: str) -> TokenSelection:
-    """Select sequence-ref tokens that point at the given sequence id.
+def _select_by_sequence_id(sample: Sample, seq_id: str) -> TokenSelection:
+    """Implementation backing :meth:`Sample.select_by_sequence_id`.
 
     A sequence ref is identified by ``id is None`` and carries the target
     :class:`Sequence` id in its ``token`` field. Useful for finding *where*
     a shared run is referenced in a sample without expanding it.
-
-    Args:
-        sample: The sample to select from.
-        seq_id: The :class:`Sequence` id to match (e.g. ``"seq_0"``).
-
-    Returns:
-        A :class:`TokenSelection` containing the ref tokens.
     """
     tokens = []
     positions = []
@@ -98,18 +63,8 @@ def select_by_sequence_id(sample: Sample, seq_id: str) -> TokenSelection:
     )
 
 
-def select_by_span(sample: Sample, span_name: str) -> TokenSelection:
-    """Select tokens covered by any :class:`Span` with the given name.
-
-    Positions are unioned across every matching span on the sample.
-
-    Args:
-        sample: The sample to select from.
-        span_name: The span name to match.
-
-    Returns:
-        A :class:`TokenSelection` with positions sorted ascending.
-    """
+def _select_by_span(sample: Sample, span_name: str) -> TokenSelection:
+    """Implementation backing :meth:`Sample.select_by_span`."""
     position_set: set[int] = set()
     for span in sample.spans:
         if span.name == span_name:
@@ -123,15 +78,14 @@ def select_by_span(sample: Sample, span_name: str) -> TokenSelection:
     )
 
 
-def filter_samples_by_score(
+def _filter_samples_by_score(
     doc: InifDocument,
     scorer: str,
     predicate: Callable[[str | int | float | bool | list | dict], bool],
 ) -> list[Sample]:
-    """Return samples whose ``scorer`` value satisfies ``predicate``.
+    """Implementation backing :meth:`InifDocument.filter_samples_by_score`.
 
-    Compose with the position selectors above (``select`` etc.) on
-    each returned sample to drill down to specific tokens.
+    Returns samples whose ``scorer`` value satisfies ``predicate``.
     """
     results: list[Sample] = []
     for sample in doc.samples:

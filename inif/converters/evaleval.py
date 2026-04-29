@@ -30,6 +30,7 @@ from inif.converters._tokenize import (
     messages_to_tokens,
     offset_mapping_decode,
     resolve_tokenizer,
+    tag_template_field_renderings,
 )
 from inif.models import (
     InifDocument,
@@ -39,7 +40,6 @@ from inif.models import (
     SampleScore,
     SourceEval,
 )
-from inif.sequences import deduplicate_sequences
 
 FRAMEWORK_NAME = "evaleval"
 
@@ -59,8 +59,10 @@ def _get_package_versions(extra_pkgs: Iterable[str] = ()) -> dict[str, str]:
     return packages
 
 
-def _messages_from_record(record: dict) -> list[dict[str, str]]:
-    """Build a chat-template-compatible message list for a single record.
+def _messages_from_record(
+    record: dict,
+) -> tuple[list[dict[str, Any]], list[str | None]]:
+    """Build ``(msg_dicts, reasoning_per_msg)`` for a single record.
 
     Handles all three interaction types:
 
@@ -75,44 +77,62 @@ def _messages_from_record(record: dict) -> list[dict[str, str]]:
     No ``system`` message is synthesised here — if one exists in
     ``messages[]`` it is preserved, but single-turn records have no slot for a
     system prompt in the EEE schema.
+
+    The returned ``reasoning_per_msg`` carries each turn's reasoning text (or
+    ``None``) so :func:`tag_reasoning_blocks` can annotate the rendered
+    delimiters and content after dedup.
     """
     interaction = record.get("interaction_type", "single_turn")
     if interaction == "single_turn":
         input_obj = record.get("input") or {}
         output_obj = record.get("output") or {}
         user_content = input_obj.get("raw", "") or ""
-        assistant_parts: list[str] = []
-        reasoning = output_obj.get("reasoning_trace") or []
-        if reasoning:
-            assistant_parts.append("".join(reasoning))
+        reasoning_chunks = output_obj.get("reasoning_trace") or []
+        reasoning_text = "".join(reasoning_chunks) if reasoning_chunks else ""
         raw_outputs = output_obj.get("raw") or []
-        if raw_outputs:
-            assistant_parts.append(raw_outputs[0])
-        assistant_content = "".join(assistant_parts)
-        messages = [{"role": "user", "content": user_content}]
-        if assistant_content:
-            messages.append({"role": "assistant", "content": assistant_content})
-        return messages
+        assistant_content = raw_outputs[0] if raw_outputs else ""
+        msg_dicts: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
+        reasoning_per_msg: list[str | None] = [None]
+        if assistant_content or reasoning_text:
+            assistant_dict: dict[str, Any] = {
+                "role": "assistant",
+                "content": assistant_content,
+            }
+            if reasoning_text:
+                assistant_dict["reasoning"] = reasoning_text
+                assistant_dict["reasoning_content"] = reasoning_text
+            msg_dicts.append(assistant_dict)
+            reasoning_per_msg.append(reasoning_text or None)
+        return msg_dicts, reasoning_per_msg
 
     # multi_turn / agentic
     raw_msgs = sorted(
         (record.get("messages") or []),
         key=lambda m: m.get("turn_idx", 0),
     )
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
+    out_reasoning: list[str | None] = []
     for msg in raw_msgs:
-        parts: list[str] = []
-        reasoning = msg.get("reasoning_trace")
-        if reasoning:
-            parts.append(reasoning)
+        reasoning = msg.get("reasoning_trace") or ""
         content = msg.get("content") or ""
-        parts.append(content)
+        # Tool calls survive into the rendered content as a compact tag so
+        # they are visible to downstream tagging even on chat templates that
+        # don't render the structured tool_calls field directly.
+        tail_parts: list[str] = []
         for call in msg.get("tool_calls") or []:
             name = call.get("name", "")
             args = call.get("arguments") or {}
-            parts.append(f"<tool_call name={name} args={json.dumps(args)}/>")
-        out.append({"role": msg.get("role", "user"), "content": "".join(parts)})
-    return out
+            tail_parts.append(f"<tool_call name={name} args={json.dumps(args)}/>")
+        d: dict[str, Any] = {
+            "role": msg.get("role", "user"),
+            "content": content + "".join(tail_parts),
+        }
+        if reasoning:
+            d["reasoning"] = reasoning
+            d["reasoning_content"] = reasoning
+        out.append(d)
+        out_reasoning.append(reasoning or None)
+    return out, out_reasoning
 
 
 def _terminal_attribution(record: dict) -> dict | None:
@@ -181,82 +201,6 @@ def _build_sample_metadata(record: dict) -> dict[str, Any]:
     return md
 
 
-def _reasoning_spans_for_record(record: dict) -> list[tuple[int, str]]:
-    """Return ``(message_index, reasoning_text)`` spans for char-span tagging.
-
-    ``_messages_from_record`` prepends each reasoning trace to its message
-    content, so each trace is a per-message prefix rather than one contiguous
-    document-level string.
-    """
-    interaction = record.get("interaction_type", "single_turn")
-    if interaction == "single_turn":
-        trace = (record.get("output") or {}).get("reasoning_trace") or []
-        reasoning = "".join(trace)
-        return [(1, reasoning)] if reasoning else []
-
-    spans: list[tuple[int, str]] = []
-    for i, msg in enumerate(
-        sorted((record.get("messages") or []), key=lambda m: m.get("turn_idx", 0))
-    ):
-        r = msg.get("reasoning_trace")
-        if r:
-            spans.append((i, r))
-    return spans
-
-
-def _tag_message_prefix_span(
-    sample: Sample,
-    msg_dicts: list[dict[str, str]],
-    tokenizer: Any,
-    message_index: int,
-    text: str,
-    tag: str,
-) -> bool:
-    """Tag a prefix span inside a specific message's rendered content."""
-    if not text or not hasattr(tokenizer, "apply_chat_template"):
-        return False
-    if message_index >= len(msg_dicts):
-        return False
-
-    formatted = tokenizer.apply_chat_template(
-        msg_dicts, tokenize=False, add_generation_prompt=False
-    )
-    decoded = [t.token or "" for t in sample.tokens]
-    if "".join(decoded) != formatted:
-        return False
-
-    search_from = 0
-    char_start: int | None = None
-    char_end: int | None = None
-    for i, msg in enumerate(msg_dicts):
-        content = msg.get("content", "")
-        if not content:
-            continue
-        content_start = formatted.find(content, search_from)
-        if content_start < 0:
-            return False
-        if i == message_index:
-            if not content.startswith(text):
-                return False
-            char_start = content_start
-            char_end = content_start + len(text)
-            break
-        search_from = content_start + len(content)
-
-    if char_start is None or char_end is None:
-        return False
-
-    positions: list[int] = []
-    pos = 0
-    for i, s in enumerate(decoded):
-        s_start, s_end = pos, pos + len(s)
-        if s_end > char_start and s_start < char_end:
-            positions.append(i)
-        pos = s_end
-    sample.annotate_positions(tag, positions, metadata={"source": "reasoning_trace"})
-    return True
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -269,7 +213,7 @@ def from_instance_records(
     tokenizer: Any = "auto",
     include_messages: bool = True,
     deduplicate: bool = True,
-    min_sequence_length: int = 3,
+    min_sequence_length: int = 5,
     tag_chat_roles: bool = True,
     tag_generated: bool = True,
     tag_reasoning: bool = True,
@@ -304,9 +248,13 @@ def from_instance_records(
         tag_chat_roles: Add role annotations via character-span matching.
         tag_generated: Annotate the last assistant message's tokens with
             ``"generated"``.
-        tag_reasoning: Annotate tokens overlapping the reasoning-trace span with
-            ``"reasoning"``. Best-effort: silently skipped when the token stream
-            doesn't round-trip cleanly to the formatted chat template.
+        tag_reasoning: Annotate tokens belonging to each turn's
+            ``reasoning_trace`` span. Matching tokens get ``reasoning`` +
+            ``assistant``; tokens within the span whose id appears in
+            ``tokenizer.all_special_ids`` additionally get ``template``.
+            Best-effort: silently skipped when the token stream doesn't
+            round-trip cleanly to the formatted chat template or the
+            reasoning text can't be located.
 
     Returns:
         An :class:`InifDocument` with one :class:`Sample` per record.
@@ -328,7 +276,7 @@ def from_instance_records(
     decode_cache: dict[int, str] | None = None
     use_offset_mapping = False
     if records:
-        probe_msgs = _messages_from_record(records[0])
+        probe_msgs, _ = _messages_from_record(records[0])
         if probe_msgs and offset_mapping_decode(probe_msgs, tokenizer) is not None:
             use_offset_mapping = True
         elif has_byte_level_decoder(tokenizer):
@@ -340,7 +288,7 @@ def from_instance_records(
     all_msg_dicts: list[list[dict[str, str]]] = []
 
     for record in records:
-        msg_dicts = _messages_from_record(record)
+        msg_dicts, _reasoning = _messages_from_record(record)
         texts, sample_tokens = messages_to_tokens(
             msg_dicts,
             tokenizer,
@@ -383,12 +331,6 @@ def from_instance_records(
             if rng is not None:
                 sample.annotate("generated", [rng], metadata={"source": "converter"})
 
-        if tag_reasoning:
-            for msg_index, reasoning in _reasoning_spans_for_record(record):
-                _tag_message_prefix_span(
-                    sample, msg_dicts, tokenizer, msg_index, reasoning, "reasoning"
-                )
-
         all_msg_dicts.append(msg_dicts)
         samples.append(sample)
 
@@ -402,12 +344,17 @@ def from_instance_records(
     doc = InifDocument(metadata=metadata, samples=samples)
 
     if deduplicate:
-        doc = deduplicate_sequences(doc, min_length=min_sequence_length)
+        doc = doc.deduplicate_sequences(min_length=min_sequence_length)
 
     if tag_chat_roles:
-        from inif.tagging import tag_chat_roles_doc
+        doc.tag_chat_roles(all_msg_dicts, tokenizer)
 
-        tag_chat_roles_doc(doc, all_msg_dicts, tokenizer)
+    if tag_reasoning:
+        sequences = doc.sequences or None
+        for sample, msg_dicts in zip(doc.samples, all_msg_dicts):
+            tag_template_field_renderings(
+                sample, msg_dicts, tokenizer, sequences=sequences
+            )
 
     return doc
 

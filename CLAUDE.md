@@ -27,13 +27,14 @@ Research-oriented library. Follow nnterp conventions:
 
 ## Architecture
 
-- `models.py` — Core Pydantic models (InifDocument, Sample, TokenOrSeqRef, Sequence, Text, etc.)
+- `models.py` — Core Pydantic models (InifDocument, Sample, TokenOrSeqRef, Sequence, Text, etc.). All public verbs (save / load / to_dict / from_dict, sequence (de)duplication, selection, tagging, viewer, etc.) live here as methods on `InifDocument` and `Sample`. The other modules below host the underscore-prefixed implementations the methods delegate to.
 - `schema.py` — JSON schema dict + validation
-- `io.py` — save/load (.inif.json, .inif indexed archive) plus the unified `iter_samples` / `read_samples` / `read_info` readers
+- `io.py` — backs `InifDocument.save` / `.load` / `.to_dict` / `.from_dict` (suffix-based dispatch between `.inif.json` and `.inif`); also exposes the path-based unified readers `iter_samples` / `read_samples` / `read_info`
 - `indexed.py` — single-file indexed `.inif` archive writer + internal readers (used by `io.py`)
-- `selectors.py` — Position selection by index/annotation/span/sequence_id/score
-- `tagging.py` — Regex-based auto-tagging, span creation
-- `sequences.py` — Sequence deduplication (lmout-style set-intersection) and expansion
+- `selectors.py` — `_select_by_*` helpers (called by `Sample` selection methods) and `_filter_samples_by_score` (called by `InifDocument.filter_samples_by_score`); also exports `TokenSelection`
+- `tagging.py` — `_tag_by_*` / `_tag_chat_*` / `_create_span_from_tag` helpers powering the `Sample.tag_*` and `InifDocument.tag_*` methods; also exports `TextTagMode`, `RegexTag`, `PredicateTag`, `TokenPredicate`
+- `sequences.py` — `_deduplicate_sequences` / `_expand_sequences` helpers backing the `InifDocument` methods of the same name
+- `viewer.py` — `_render_html` / `_show` / `_save_html` helpers backing the `InifDocument` methods
 - `converters/inspect_ai.py` — Inspect AI EvalLog converter
 - `converters/evaleval.py` — every_eval_ever (EEE) instance-level → `InifDocument`
 - `converters/_tokenize.py` — shared `apply_chat_template` → `TokenOrSeqRef` helpers (used by both eval converters); also `name_messages` for role-named `Text` segments
@@ -57,7 +58,8 @@ Research-oriented library. Follow nnterp conventions:
 - **Sequence.id**: string identifier (e.g. `"sequence_0"`)
 - **Sample.texts**: list of `Text` (`{name, value, metadata}`); see `Text` above.
 - **Metadata.created_at**: `datetime` (pydantic auto-parses ISO strings on load; `to_dict` uses `mode="json"` to emit ISO strings).
-- **Deduplication**: finds token sequences common to ALL samples via set-intersection of contiguous n-grams; replacement requires both the token strings AND ids to match.
+- **Deduplication**: finds token sequences common to ALL samples via set-intersection of contiguous n-grams; replacement requires both the token strings AND ids to match. Default `min_length=5` (was `3` pre-0.0.3) — short shared runs aren't worth the indirection in practice; pass an explicit smaller value when you really need to capture them.
+- **Method-only public API**: anything that operates on a class instance is a method on that class. Save / load, `to_dict` / `from_dict`, sequence (de)duplication, selection, tagging, score-based filtering, viewer rendering — all live on `InifDocument` and `Sample`. The corresponding underscore-prefixed functions in `io.py` / `sequences.py` / `selectors.py` / `tagging.py` / `viewer.py` are internal implementations and are not re-exported from `inif.__init__`.
 
 ## Tokenizer resolution (Inspect + evaleval)
 
@@ -69,20 +71,21 @@ Research-oriented library. Follow nnterp conventions:
 ## Inspect AI converter conventions
 
 - **`tag_generated=True`** (default): tokens belonging to the LAST assistant message are annotated `"generated"`. Identification uses character-span matching against `apply_chat_template` output, so it works for any HuggingFace chat template.
+- **`tag_reasoning=True`** (default): runs the shared `tag_template_field_renderings` helper, which detects each per-message structured field (`reasoning`, `tool_calls`) by rendering the chat template twice — once with the field, once without — and using the diff to locate the chars the template emitted FOR that field. Tokens in the diff window get the field's annotation (`reasoning` / `tool_call`) AND the message's role (`assistant`), moved out of `template` if `tag_chat_roles` had labelled them there. Fully model-agnostic: the chat template itself decides where each field renders. `_extract_message_dicts` separates reasoning from `content` (passed via `reasoning_content` + `reasoning`), propagates `tool_calls` (OpenAI/Kimi shape) and `tool_call_id`/`name`, and `render_chat_template` always passes `preserve_thinking=True` so chat templates that strip reasoning from history (Kimi) preserve it for analysis. The chat-template kwarg is silently ignored by templates that don't recognize it.
 - **`extract_logprobs=True`** (default): per-token logprobs from `inspect_sample.output.choices[0].logprobs.content` are attached to the response tokens via `set_extra("logprob", ...)`. Best-effort: skipped silently when the eval-source tokenization disagrees with our tokenizer on token count.
-- **`filter_samples_by_score(doc, scorer, predicate)`** returns `list[Sample]` (compose with the position selectors). The old `select_by_score` is gone.
+- **`InifDocument.filter_samples_by_score(scorer, predicate)`** returns `list[Sample]` (compose with the per-sample selection methods like `Sample.select_by_annotation`). The old `select_by_score` is gone.
 
 ## Evaleval converter conventions
 
 - **Schema**: targets `instance_level_eval_0.2.2` from `evaleval/every_eval_ever`. Trusted as-is — users who want jsonschema validation should run it themselves against the upstream schema before calling the converter.
 - **Three entry points** in `inif/converters/evaleval.py`: `from_instance_records(records, aggregate=None, ...)` (core), `from_eval_json(aggregate_path, instances_path, ...)` (local JSON / JSONL), `from_hf_dataset(config, split="samples", aggregate_config=None, limit=None, ...)` (streams rows from `evaleval/EEE_datastore`).
 - **Interaction types**: `single_turn` synthesises `user` + `assistant` messages; `multi_turn` / `agentic` use the `messages[]` array directly, ordered by `turn_idx`. `tool_calls` are rendered into assistant content as `<tool_call name=… args={…}/>` so the invocations survive tokenization.
-- **Reasoning traces**: when `tag_reasoning=True` (default), reasoning-trace tokens are char-span annotated with `"reasoning"`. Best-effort: silently skipped when the tokenizer's per-token decode doesn't round-trip to `apply_chat_template`.
+- **Reasoning traces**: when `tag_reasoning=True` (default), each turn's `reasoning_trace` is routed through the chat template's native `reasoning_content` slot (NOT prepended to `content`), and the shared `tag_template_field_renderings` helper detects the rendered chars via render-with-vs-without diff. Tokens get `reasoning` + the message's role (moved out of `template`). Same helper also tags `tool_calls` rendering as `tool_call` + role. Best-effort: silently skipped when the tokenizer's per-token decode doesn't round-trip to `apply_chat_template`.
 - **Score**: `SampleScore` is built from `evaluation.score` (`scorer = evaluation_name`). The terminal `answer_attribution` entry feeds `SampleScore.answer`; non-terminal entries land in `Sample.metadata["intermediate_answers"]`.
 - **Metadata mapping**: `token_usage.input_tokens`/`output_tokens` → `Sample.input_tokens`/`output_tokens`; `input.reference` → `Sample.references` (+ `Sample.target` when length 1); `input.choices` → `Sample.choices`; `interaction_type`, `error`, `sample_hash` → same-named first-class `Sample` fields. `performance`, `num_turns`, `tool_calls_count`, `reasoning_tokens`, per-sample EEE `metadata`, non-terminal `answer_attribution` entries → `Sample.metadata`. Aggregate record (when supplied) contributes `Metadata.extra["inference"]`, `["eval_library"]`, `["metric_config"]`, `["aggregate_score"]`.
 - **Optional extra**: `pip install inif[evaleval]` pulls `datasets` (imported lazily inside `from_hf_dataset`).
 
 ## IO conventions
 
-- **`save(doc, path)`** and **`load(path)`** are symmetric. Suffix-based detection: `.inif` ⇒ indexed archive; `.inif.json` / `.json` ⇒ plain JSON. `.gz`, `.inifx`, and `compress=True/False` overrides are no longer supported.
-- **Unified read API in `inif.io`**: `iter_samples(path)` (streams `Sample`s), `read_samples(path, sample_ids)` (single id or iterable; returns `list[Sample]` in requested order), `read_info(path)` (returns a `DocumentInfo` with `metadata` plus per-sample summary dicts; never inflates sequences). All three accept both `.inif` and `.inif.json` paths, dispatching to the indexed-archive readers or to a full `load` as appropriate. The format-specific helpers (`iter_indexed_samples`, `read_indexed_*`) are now internal — public callers should use the unified API.
+- **`InifDocument.save(path)`** (instance method) and **`InifDocument.load(path)`** (classmethod) are symmetric. Suffix-based detection: `.inif` ⇒ indexed archive; `.inif.json` / `.json` ⇒ plain JSON. `.gz`, `.inifx`, and `compress=True/False` overrides are no longer supported. The pre-0.0.3 module-level `save(doc, ...)` / `load(...)` / `to_dict(doc, ...)` / `from_dict(...)` functions have been removed — call the methods instead.
+- **Unified read API in `inif.io`** (path-based, no instance): `iter_samples(path)` (streams `Sample`s), `read_samples(path, sample_ids)` (single id or iterable; returns `list[Sample]` in requested order), `read_info(path)` (returns a `DocumentInfo` with `metadata` plus per-sample summary dicts; never inflates sequences). All three accept both `.inif` and `.inif.json` paths, dispatching to the indexed-archive readers or to the full document loader as appropriate. The format-specific helpers (`iter_indexed_samples`, `read_indexed_*`) are now internal — public callers should use the unified API or `InifDocument.load`.

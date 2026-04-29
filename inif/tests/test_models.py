@@ -410,6 +410,60 @@ def test_annotation_ranges_are_merged():
     assert s.annotations[0].ranges == [(0, 2)]
 
 
+def test_duplicate_annotation_names_rejected_at_construction():
+    """Two annotation entries sharing a name are forbidden — ``Sample.annotations``
+    is keyed by name."""
+    with pytest.raises(ValidationError, match="Duplicate annotation name 'role'"):
+        Sample(
+            id="x",
+            tokens=[TokenOrSeqRef(id=1, token="a"), TokenOrSeqRef(id=2, token="b")],
+            annotations=[
+                TokenAnnotation(name="role", ranges=[(0, 1)], metadata={"src": "a"}),
+                TokenAnnotation(name="role", ranges=[(1, 2)], metadata={"src": "b"}),
+            ],
+        )
+
+
+def test_annotate_same_name_merges_into_existing_entry():
+    """Subsequent ``annotate`` calls with the same name extend the existing
+    entry's ranges instead of creating a new one — metadata of the second
+    call is ignored, the existing metadata is preserved."""
+    s = Sample(
+        id="x",
+        tokens=[
+            TokenOrSeqRef(id=1, token="a"),
+            TokenOrSeqRef(id=2, token="b"),
+            TokenOrSeqRef(id=3, token="c"),
+        ],
+    )
+    s.annotate_positions("role", [0], metadata={"src": "a"})
+    # Same name, different metadata — merges ranges, keeps original metadata.
+    s.annotate_positions("role", [2], metadata={"src": "b"})
+    assert len(s.annotations) == 1
+    assert s.annotations[0].name == "role"
+    assert s.annotations[0].ranges == [(0, 1), (2, 3)]
+    assert s.annotations[0].metadata == {"src": "a"}
+
+
+def test_annotate_overlapping_ranges_are_collapsed():
+    """Adding overlapping or adjacent ranges to the same name collapses them
+    into a single span (e.g. existing ``[5, 7)`` + new ``[6, 10)`` →
+    ``[5, 10)``)."""
+    s = Sample(
+        id="x",
+        tokens=[TokenOrSeqRef(id=i, token=chr(ord("a") + i)) for i in range(12)],
+    )
+    s.annotate("ann", [(5, 7)])
+    s.annotate("ann", [(6, 10)])
+    assert s.annotations[0].ranges == [(5, 10)]
+    # Adjacent (touching but not overlapping) ranges also collapse.
+    s.annotate("ann", [(10, 12)])
+    assert s.annotations[0].ranges == [(5, 12)]
+    # An island that doesn't touch stays as a separate range.
+    s.annotate("ann", [(0, 2)])
+    assert s.annotations[0].ranges == [(0, 2), (5, 12)]
+
+
 def test_sample_defaults():
     s = Sample(id="x")
     assert s.tokens == []
@@ -433,3 +487,52 @@ def test_sample_texts_are_text_objects():
     assert [t.value for t in s.texts] == ["Hello", "World"]
     assert s.texts[0].metadata == {}
     assert s.texts[1].metadata == {"source": "demo"}
+
+
+def test_text_start_end_validation():
+    # Both unset is fine.
+    t = Text(name="x", value="y")
+    assert t.start is None and t.end is None
+
+    # Both set, valid range.
+    t = Text(name="x", value="y", start=0, end=5)
+    assert (t.start, t.end) == (0, 5)
+
+    # Empty range is allowed (a chat message that produced no tokens).
+    Text(name="x", value="y", start=3, end=3)
+
+    # Negative start.
+    with pytest.raises(ValidationError, match="invalid range"):
+        Text(name="x", value="y", start=-1, end=2)
+    # End before start.
+    with pytest.raises(ValidationError, match="invalid range"):
+        Text(name="x", value="y", start=5, end=3)
+    # Setting only one of the two raises.
+    with pytest.raises(ValidationError, match="must set both"):
+        Text(name="x", value="y", start=0)
+    with pytest.raises(ValidationError, match="must set both"):
+        Text(name="x", value="y", end=5)
+
+
+def test_replace_token_with_tokens_shifts_text_offsets():
+    # Replacing a single ref token with N expanded tokens should push every
+    # text whose range starts after the replacement by ``N - 1`` positions
+    # and stretch the text containing the replacement.
+    s = Sample(
+        id="x",
+        tokens=[
+            TokenOrSeqRef(id=None, token="seq_0"),  # ref at index 0
+            TokenOrSeqRef(id=2, token="b"),
+            TokenOrSeqRef(id=3, token="c"),
+        ],
+        texts=[
+            Text(name="t0", value="ab", start=0, end=2),
+            Text(name="t1", value="c", start=2, end=3),
+        ],
+    )
+    s._replace_token_with_tokens(
+        0,
+        [TokenOrSeqRef(id=10, token="x"), TokenOrSeqRef(id=11, token="y")],
+    )
+    assert (s.texts[0].start, s.texts[0].end) == (0, 3)
+    assert (s.texts[1].start, s.texts[1].end) == (3, 4)

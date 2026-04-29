@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from inif.io import load, save
 from inif.models import (
     InifDocument,
     Metadata,
@@ -8,33 +7,33 @@ from inif.models import (
     Sample,
     SampleScore,
     Sequence,
+    Text,
     TokenOrSeqRef,
 )
-from inif.viewer import render_html, save_html
 
 
 def test_render_html_basic(doc):
-    html = render_html(doc)
+    html = doc.render_html()
     assert "<!DOCTYPE html>" in html
     assert "gpt2" in html
     assert "sample_0" in html
 
 
 def test_render_html_tokens(doc):
-    html = render_html(doc)
+    html = doc.render_html()
     assert " a" in html
     assert " test" in html
     assert "." in html
 
 
 def test_render_html_metadata(doc):
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inspect_ai" in html
     assert "mmlu" in html
 
 
 def test_render_html_scores(doc):
-    html = render_html(doc)
+    html = doc.render_html()
     assert "accuracy" in html
     assert "1.0" in html
     assert "f1" in html
@@ -42,35 +41,35 @@ def test_render_html_scores(doc):
 
 
 def test_render_html_spans(doc):
-    html = render_html(doc)
+    html = doc.render_html()
     assert "answer" in html
 
 
 def test_render_html_sequence_refs(doc):
-    html = render_html(doc)
+    html = doc.render_html()
     assert "seq-ref" in html
 
 
 def test_render_html_compact(doc):
-    html = render_html(doc, compact=True)
+    html = doc.render_html(compact=True)
     assert "<!DOCTYPE html>" in html
     assert "gpt2" in html
 
 
 def test_render_html_title(doc):
-    html = render_html(doc, title="My Custom Title")
+    html = doc.render_html(title="My Custom Title")
     assert "My Custom Title" in html
 
 
 def test_render_html_extra_fields(doc):
-    html = render_html(doc)
+    html = doc.render_html()
     # logprob is an extra field on one of the tokens
     assert "logprob" in html
 
 
 def test_save_html(doc, tmp_path):
     out = tmp_path / "test.html"
-    save_html(doc, out)
+    doc.save_html(out)
     assert out.exists()
     content = out.read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in content
@@ -80,7 +79,7 @@ def test_save_html(doc, tmp_path):
 def test_save_html_source_as_title(doc, tmp_path):
     """When no title is given, the source filename is used as the title."""
     out = tmp_path / "test.html"
-    save_html(doc, out, source="/data/my_analysis.inif.json")
+    doc.save_html(out, source="/data/my_analysis.inif.json")
     content = out.read_text(encoding="utf-8")
     assert "my_analysis.inif.json" in content
     # model name should not be the title
@@ -90,7 +89,7 @@ def test_save_html_source_as_title(doc, tmp_path):
 def test_save_html_title_overrides_source(doc, tmp_path):
     """Explicit title takes precedence over source filename."""
     out = tmp_path / "test.html"
-    save_html(doc, out, title="Custom", source="/data/file.inif.json")
+    doc.save_html(out, title="Custom", source="/data/file.inif.json")
     content = out.read_text(encoding="utf-8")
     assert "Custom" in content
     assert "file.inif.json" not in content
@@ -98,7 +97,7 @@ def test_save_html_title_overrides_source(doc, tmp_path):
 
 def test_render_html_minimal():
     doc = InifDocument(metadata=Metadata(model=ModelInfo(name="minimal")))
-    html = render_html(doc)
+    html = doc.render_html()
     assert "<!DOCTYPE html>" in html
     assert "No samples" in html
 
@@ -111,7 +110,7 @@ def test_render_html_multiple_samples():
             Sample(id="s1", tokens=[TokenOrSeqRef(id=2, token="world")]),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     # Sidebar with sample items instead of tabs
     assert "inif-sample-item" in html
     assert "inif-sidebar" in html
@@ -129,7 +128,7 @@ def test_render_html_xss_safety():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "<script>alert" not in html
     assert "&lt;script&gt;" in html
 
@@ -137,11 +136,11 @@ def test_render_html_xss_safety():
 def test_save_html_from_indexed_inif(doc, tmp_path):
     """View command round-trip: save as indexed .inif, load, render HTML."""
     inif_path = tmp_path / "test.inif"
-    save(doc, inif_path)
+    doc.save(inif_path)
 
-    reloaded = load(inif_path)
+    reloaded = InifDocument.load(inif_path)
     out = tmp_path / "from_inif.html"
-    save_html(reloaded, out)
+    reloaded.save_html(out)
     assert out.exists()
     content = out.read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in content
@@ -152,11 +151,11 @@ def test_save_html_from_indexed_inif(doc, tmp_path):
 def test_save_html_from_plain_json(doc, tmp_path):
     """View command round-trip: save as .inif.json, load, render HTML."""
     json_path = tmp_path / "test.inif.json"
-    save(doc, json_path)
+    doc.save(json_path)
 
-    reloaded = load(json_path)
+    reloaded = InifDocument.load(json_path)
     out = tmp_path / "from_json.html"
-    save_html(reloaded, out)
+    reloaded.save_html(out)
     assert out.exists()
     content = out.read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in content
@@ -168,7 +167,7 @@ def test_save_html_from_plain_json(doc, tmp_path):
 
 def test_render_html_sidebar_layout(doc):
     """Sidebar layout structure present for docs with samples."""
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-layout" in html
     assert "inif-sidebar" in html
     assert "inif-main" in html
@@ -179,15 +178,15 @@ def test_render_html_sidebar_layout(doc):
 
 def test_render_html_sidebar_collapse_toggle(doc):
     """Sidebar has collapse toggle button."""
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-sidebar-toggle" in html
     # Contains the left-pointing arrow ‹
-    assert "\u2039" in html
+    assert "‹" in html
 
 
 def test_render_html_sidebar_metadata_inside(doc):
     """Metadata is rendered inside the sidebar."""
-    html = render_html(doc)
+    html = doc.render_html()
     # Metadata should be inside sidebar-content div (not the CSS)
     div_marker = '<div class="inif-sidebar-content">'
     sidebar_start = html.index(div_marker)
@@ -199,7 +198,7 @@ def test_render_html_sidebar_metadata_inside(doc):
 
 def test_render_html_no_old_tabs(doc):
     """Old tab-based elements should not be present."""
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-sample-tab" not in html
     assert "inif-sample-tabs" not in html
 
@@ -219,9 +218,9 @@ def test_render_html_exact_match_pass():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-em-pass" in html
-    assert "\u2713" in html
+    assert "✓" in html
 
 
 def test_render_html_exact_match_fail():
@@ -236,9 +235,9 @@ def test_render_html_exact_match_fail():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-em-fail" in html
-    assert "\u2717" in html
+    assert "✗" in html
 
 
 def test_render_html_exact_match_other_value():
@@ -253,14 +252,14 @@ def test_render_html_exact_match_other_value():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     # Check marks/X marks should not appear in the sample list
-    assert "\u2713" not in html
-    assert "\u2717" not in html
+    assert "✓" not in html
+    assert "✗" not in html
 
 
 def test_render_html_other_numeric_scorer_also_shows_indicator():
-    """Any scorer whose value is 0.0 or 1.0 drives the sidebar indicator \u2014 not
+    """Any scorer whose value is 0.0 or 1.0 drives the sidebar indicator — not
     just exact_match. Covers Inspect scorers like ``accuracy``/``choice`` and
     any custom scorer that emits binary results."""
     doc = InifDocument(
@@ -273,7 +272,7 @@ def test_render_html_other_numeric_scorer_also_shows_indicator():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-em-pass" in html
 
 
@@ -297,7 +296,7 @@ def test_render_html_is_correct_metadata_drives_indicator():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-em-fail" in html
 
 
@@ -313,9 +312,9 @@ def test_render_html_non_binary_value_shows_no_indicator():
             ),
         ],
     )
-    html = render_html(doc)
-    assert "\u2713" not in html
-    assert "\u2717" not in html
+    html = doc.render_html()
+    assert "✓" not in html
+    assert "✗" not in html
 
 
 # --- Annotation highlight tests ---
@@ -349,7 +348,7 @@ def _make_annotation_doc():
 def test_render_html_annotation_highlight_data_attrs():
     """Annotated tokens get annotation data attributes."""
     doc = _make_annotation_doc()
-    html = render_html(doc)
+    html = doc.render_html()
     assert 'data-annotations="system"' in html
     assert 'data-annotations="user"' in html
     assert 'data-annotations="assistant"' in html
@@ -359,7 +358,7 @@ def test_render_html_annotation_highlight_data_attrs():
 def test_render_html_role_annotation_highlight_colors():
     """Common chat-role annotations get stable background colors."""
     doc = _make_annotation_doc()
-    html = render_html(doc)
+    html = doc.render_html()
     assert "#d4e6f1" in html  # system
     assert "#d5f5e3" in html  # user
     assert "#fdebd0" in html  # assistant
@@ -368,7 +367,7 @@ def test_render_html_role_annotation_highlight_colors():
 def test_render_html_has_annotations_attr():
     """Token strip gets data-has-annotations attribute."""
     doc = _make_annotation_doc()
-    html = render_html(doc)
+    html = doc.render_html()
     assert 'data-has-annotations="true"' in html
 
 
@@ -380,7 +379,7 @@ def test_render_html_no_annotations_attr():
             Sample(id="nr0", tokens=[TokenOrSeqRef(id=1, token="plain")]),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert 'data-has-annotations="false"' in html
 
 
@@ -396,7 +395,7 @@ def test_render_html_unknown_annotation():
             )
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert 'data-annotations="custom_annotation"' in html
     assert "data-annotation-bg=" in html
 
@@ -407,7 +406,7 @@ def test_render_html_unknown_annotation():
 def test_render_html_control_panel_with_annotations():
     """Control panel checkbox is checked when sample has annotations."""
     doc = _make_annotation_doc()
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-control-panel" in html
     assert "inif-annotation-toggle" in html
     assert "checked" in html
@@ -423,7 +422,7 @@ def test_render_html_control_panel_no_annotations():
             Sample(id="nr0", tokens=[TokenOrSeqRef(id=1, token="plain")]),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-control-panel" in html
     assert "disabled" in html
     assert 'label class="disabled"' in html
@@ -432,7 +431,7 @@ def test_render_html_control_panel_no_annotations():
 def test_render_html_annotation_legend_in_control_panel():
     """Annotation legend with swatches appears inside the control panel."""
     doc = _make_annotation_doc()
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-annotation-legend" in html
     assert "inif-annotation-swatch" in html
     # Annotation names appear in the legend
@@ -452,7 +451,7 @@ def test_render_html_no_annotation_legend_without_annotations():
             Sample(id="nr0", tokens=[TokenOrSeqRef(id=1, token="plain")]),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert '<div class="inif-annotation-legend">' not in html
 
 
@@ -461,7 +460,7 @@ def test_render_html_no_annotation_legend_without_annotations():
 
 def test_render_html_sample_header_stats(doc):
     """Sample header contains stats (target, tokens)."""
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-sample-header" in html
     assert "inif-sample-stats" in html
     assert "Target" in html
@@ -481,12 +480,14 @@ def test_render_html_annotation_bg_data_attr():
             )
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "data-annotation-bg=" in html
 
 
 def test_render_html_multiple_annotations_listed():
-    """When a token has multiple annotations, all names are exposed."""
+    """When a token has multiple annotations, all names are exposed and the
+    higher-priority one (user-defined > auto sub-text > chat role) drives
+    the background color."""
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="multi_annotation")),
         samples=[
@@ -500,9 +501,39 @@ def test_render_html_multiple_annotations_listed():
             )
         ],
     )
-    html = render_html(doc)
-    assert 'data-annotations="user,some_annotation"' in html
-    assert "#d5f5e3" in html
+    html = doc.render_html()
+    assert 'data-annotations="some_annotation,user"' in html
+
+
+def test_render_html_annotation_priority_ordering():
+    """Chat-role tags (assistant/template/...) yield to auto sub-text tags
+    (reasoning/tool_call), which in turn yield to user-defined tags."""
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="priority")),
+        samples=[
+            Sample(
+                id="p0",
+                tokens=[
+                    TokenOrSeqRef(id=1, token="a"),
+                    TokenOrSeqRef(id=2, token="b"),
+                    TokenOrSeqRef(id=3, token="c"),
+                ],
+                annotations=[
+                    # Token 0: chat-role only
+                    {"name": "assistant", "ranges": [(0, 3)]},
+                    # Token 1: chat-role + auto sub-text → reasoning wins
+                    {"name": "reasoning", "ranges": [(1, 3)]},
+                    # Token 2: chat-role + auto sub-text + user-defined →
+                    # user-defined wins
+                    {"name": "my_probe", "ranges": [(2, 3)]},
+                ],
+            )
+        ],
+    )
+    html = doc.render_html()
+    assert 'data-annotations="assistant"' in html
+    assert 'data-annotations="reasoning,assistant"' in html
+    assert 'data-annotations="my_probe,reasoning,assistant"' in html
 
 
 # --- Extra field underline tests ---
@@ -516,7 +547,7 @@ def test_render_html_extra_field_underline_single():
         metadata=Metadata(model=ModelInfo(name="ext")),
         samples=[Sample(id="e0", tokens=[tok])],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "box-shadow:" in html
     assert "inset 0 -2px 0 0" in html
 
@@ -530,7 +561,7 @@ def test_render_html_extra_field_underline_two_fields():
         metadata=Metadata(model=ModelInfo(name="ext")),
         samples=[Sample(id="e0", tokens=[tok])],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "box-shadow:" in html
     # Two inset shadows stacked
     assert "inset 0 -2px 0 0" in html
@@ -547,7 +578,7 @@ def test_render_html_extra_field_different_tokens():
         metadata=Metadata(model=ModelInfo(name="ext")),
         samples=[Sample(id="e0", tokens=[tok_a, tok_b])],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     # Both tokens get underlines
     assert html.count("box-shadow:") == 2
 
@@ -560,7 +591,7 @@ def test_render_html_extras_legend_in_control_panel():
         metadata=Metadata(model=ModelInfo(name="ext")),
         samples=[Sample(id="e0", tokens=[tok])],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     # Legend elements present
     assert "inif-extras-legend" in html
     assert "inif-extra-swatch" in html
@@ -580,7 +611,7 @@ def test_render_html_no_extras_legend_plain_token():
             Sample(id="p0", tokens=[TokenOrSeqRef(id=1, token="hi")]),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert '<div class="inif-extras-legend">' not in html
 
 
@@ -596,7 +627,7 @@ def test_render_html_annotations_not_underlined():
             )
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "box-shadow:" not in html
     assert '<div class="inif-extras-legend">' not in html
 
@@ -610,7 +641,7 @@ def test_render_html_extra_padding_multiple():
         metadata=Metadata(model=ModelInfo(name="pad")),
         samples=[Sample(id="p0", tokens=[tok])],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "padding-bottom:4px" in html
 
 
@@ -619,14 +650,14 @@ def test_render_html_extra_padding_multiple():
 
 def test_render_html_sidebar_collapsed_hides_text(doc):
     """CSS hides the header text span when sidebar is collapsed."""
-    html = render_html(doc)
+    html = doc.render_html()
     assert ".inif-sidebar.collapsed .inif-sidebar-header > span" in html
     assert "display: none" in html
 
 
 def test_render_html_sidebar_collapsed_overflow(doc):
     """CSS sets overflow hidden on collapsed sidebar."""
-    html = render_html(doc)
+    html = doc.render_html()
     # Find the collapsed rule in CSS
     css_start = html.index("<style>")
     css_end = html.index("</style>")
@@ -663,14 +694,14 @@ def test_render_html_seq_ref_expanded_into_individual_tokens():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     # Each sub-token from sequence should be a separate seq-ref span
     assert html.count("seq-ref") >= 3
     # Individual tokens appear separately (not concatenated)
     assert "Hello" in html
     assert "world" in html  # " world" after escaping leading space
     assert "!" in html
-    assert "\u00b7end" in html
+    assert "·end" in html
 
 
 def test_render_html_seq_ref_expanded_uses_real_token_ids():
@@ -694,7 +725,7 @@ def test_render_html_seq_ref_expanded_uses_real_token_ids():
         ],
     )
 
-    html = render_html(doc)
+    html = doc.render_html()
 
     assert html.count('class="inif-token seq-ref"') == 2
     assert 'data-token-id="11"' in html
@@ -720,7 +751,7 @@ def test_render_html_seq_ref_wraps_like_normal_tokens():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     # Two separate seq-ref spans, not one big one
     count = html.count('class="inif-token seq-ref"')
     assert count == 2
@@ -737,7 +768,7 @@ def test_render_html_seq_ref_fallback_missing_seq():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "seq-ref" in html
     assert "[nonexistent]" in html
 
@@ -763,7 +794,7 @@ def test_render_html_seq_ref_shares_position():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     # "before" is at position 0, both seq-ref tokens at position 1
     assert 'data-position="0"' in html
     assert 'data-position="1"' in html
@@ -787,8 +818,8 @@ def test_render_html_newline_shown_as_symbol():
             ),
         ],
     )
-    html = render_html(doc)
-    assert "\u21b5" in html  # ↵ symbol
+    html = doc.render_html()
+    assert "↵" in html  # ↵ symbol
 
 
 def test_render_html_newline_inserts_line_break():
@@ -806,9 +837,9 @@ def test_render_html_newline_inserts_line_break():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     # The newline token span should be followed by a line-break div
-    idx_newline = html.index("\u21b5")
+    idx_newline = html.index("↵")
     after_newline = html[idx_newline:]
     span_end = after_newline.index("</span>")
     after_span = after_newline[span_end + len("</span>") :].lstrip()
@@ -836,9 +867,9 @@ def test_render_html_newline_in_seq_ref_inserts_line_break():
             ),
         ],
     )
-    html = render_html(doc)
-    assert "\u21b5" in html
-    idx_sym = html.index("\u21b5")
+    html = doc.render_html()
+    assert "↵" in html
+    idx_sym = html.index("↵")
     after = html[idx_sym:]
     span_end = after.index("</span>")
     rest = after[span_end + len("</span>") :].lstrip()
@@ -859,5 +890,127 @@ def test_render_html_no_line_break_without_newline():
             ),
         ],
     )
-    html = render_html(doc)
+    html = doc.render_html()
     assert "inif-line-break" not in html.split("</style>")[-1]
+
+
+# --- Per-message panel tests (markdown body + token toggle) ---
+
+
+def _make_messages_doc():
+    """A sample whose texts carry start/end so the new viewer renders
+    per-message panels with markdown bodies and per-message token strips."""
+    return InifDocument(
+        metadata=Metadata(model=ModelInfo(name="msg_panels")),
+        samples=[
+            Sample(
+                id="m0",
+                tokens=[
+                    TokenOrSeqRef(id=1, token="<sys>"),
+                    TokenOrSeqRef(id=2, token="hi"),
+                    TokenOrSeqRef(id=3, token="!"),
+                    TokenOrSeqRef(id=4, token="<usr>"),
+                    TokenOrSeqRef(id=5, token="ok"),
+                ],
+                texts=[
+                    Text(name="system_0", value="Hello, **world**!", start=0, end=3),
+                    Text(name="user_0", value="ok", start=3, end=5),
+                ],
+            ),
+        ],
+    )
+
+
+def test_render_html_message_panels_present():
+    """Texts with offsets render as one ``inif-message`` per Text."""
+    html = _make_messages_doc().render_html()
+    assert '<div class="inif-messages">' in html
+    # Two messages.
+    assert html.count('class="inif-message"') == 2
+    # Role-derived data attribute is set so CSS can color-code message headers.
+    assert 'data-role="system"' in html
+    assert 'data-role="user"' in html
+
+
+def test_render_html_message_panels_have_toggle_and_md_source():
+    """Each message has an eye toggle button and a hidden raw-markdown source
+    block that the JS markdown renderer reads via ``textContent``."""
+    html = _make_messages_doc().render_html()
+    assert html.count("inif-message-toggle") >= 2
+    assert 'class="inif-message-md-source"' in html
+    # Markdown is left raw (HTML-escaped) inside the source block; the JS
+    # renderer wraps it for display.
+    assert "Hello, **world**!" in html
+    # Rendered container is present (initially empty, populated client-side).
+    assert 'class="inif-message-md-rendered"' in html
+
+
+def test_render_html_message_panels_token_strip_scoped():
+    """The hidden ``inif-message-tokens`` block contains only that message's
+    tokens — `<sys>` belongs to the first panel; `<usr>` to the second."""
+    html = _make_messages_doc().render_html()
+    # Skip the CSS so role-selector strings (``[data-role="system"]``) don't
+    # confuse the text search; only the per-sample panel HTML matters here.
+    body = html.split("</style>", 1)[-1]
+    first_msg_start = body.index('<div class="inif-message" data-role="system"')
+    second_msg_start = body.index('<div class="inif-message" data-role="user"')
+    first_msg = body[first_msg_start:second_msg_start]
+    second_msg = body[second_msg_start:]
+    # `<sys>` (escaped) appears in message 0 only.
+    assert "&lt;sys&gt;" in first_msg
+    assert "&lt;sys&gt;" not in second_msg
+    # `<usr>` appears in message 1 only.
+    assert "&lt;usr&gt;" in second_msg
+    assert "&lt;usr&gt;" not in first_msg
+
+
+def test_render_html_messages_panel_skipped_when_no_offsets():
+    """A document whose texts lack start/end falls back to the legacy
+    full-document token strip + ``Texts`` list."""
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="legacy")),
+        samples=[
+            Sample(
+                id="l0",
+                tokens=[TokenOrSeqRef(id=1, token="x")],
+                texts=[Text(name="text_0", value="x")],  # no start/end
+            ),
+        ],
+    )
+    html = doc.render_html()
+    assert '<div class="inif-messages">' not in html
+    # Legacy "Texts" panel is shown as a fallback for old archives.
+    assert '<div class="inif-texts-panel">' in html
+
+
+def test_render_html_no_legacy_texts_panel_when_messages_render():
+    """When per-message panels are rendered, the legacy ``Texts`` block is
+    suppressed to avoid showing the same content twice."""
+    html = _make_messages_doc().render_html()
+    assert '<div class="inif-texts-panel">' not in html
+
+
+def test_render_html_message_panels_show_offsets_in_meta():
+    """The message header shows the ``[start, end)`` offsets so users can
+    cross-reference token positions in the toggled token view."""
+    html = _make_messages_doc().render_html()
+    assert "[0, 3)" in html
+    assert "[3, 5)" in html
+
+
+def test_render_html_message_md_collapse_assets_present():
+    """The CSS clip rule and the JS that mounts a "Show full text" overlay
+    button on overflowing messages both ship with every render — actual
+    overflow detection happens client-side, since text height depends on
+    the rendered viewport."""
+    html = _make_messages_doc().render_html()
+    # Clip rule for the 8-line cap.
+    assert ".inif-message-md.collapsible .inif-message-md-rendered" in html
+    # The expand button is created by JS, not server-side, so its label
+    # only appears in the inlined script.
+    assert "Show full text" in html
+    # The expanded class disables the clip when the user reveals the rest.
+    assert ".inif-message-md.collapsible.expanded" in html
+    # The token-view body has no clipping (it must always show all tokens).
+    assert "inif-message-tokens" in html
+    assert ".inif-message-tokens.collapsible" not in html
