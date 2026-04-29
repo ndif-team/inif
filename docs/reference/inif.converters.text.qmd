@@ -1,0 +1,16 @@
+---
+title: inif.converters.text
+description: Build INIF documents from raw text strings or text files on disk.
+reference: inif.converters.text
+---
+
+The fastest path from "I have some strings" to "I have an `InifDocument`".
+Handles plain strings and chat-style message lists; chat detection is
+per-element. See [the text converter guide](../converters/text.qmd) for
+options and conventions.
+
+## Entry points
+
+### from_texts
+
+### from_text_files

@@ -1,0 +1,29 @@
+---
+title: inif.indexed
+description: Indexed archive format — incremental writes, lower-level save/load, partial sample selection.
+reference: inif.indexed
+---
+
+The single-file indexed archive (`.inif`) stores metadata and sequences
+once, then writes each sample as a separate compressed member.
+`InifDocument.save` / `InifDocument.load` dispatch to this module
+automatically when the path ends in `.inif`; the entry points below expose
+the lower-level options (custom compression level, max preview-text length,
+partial loads via `sample_ids=`).
+
+For format-agnostic readers (`iter_samples`, `read_samples`, `read_info`)
+that work on both `.inif` and `.inif.json` files, see
+[`inif.io`](inif.io.qmd).
+
+See [Saving and loading](../workflows/io.qmd#indexed-archive) for the
+narrative overview.
+
+## Writer
+
+### IndexedInifWriter
+
+### save_indexed
+
+## Reader
+
+### load_indexed

@@ -1,0 +1,12 @@
+---
+title: inif.viewer
+description: HTML viewer implementations powering InifDocument.render_html / .save_html / .show.
+reference: inif.viewer
+---
+
+The viewer is exposed as three methods on
+[`InifDocument`](inif.models.qmd) — `render_html()`, `save_html(path)`,
+and `show()`. The implementations live in this module.
+
+See [HTML viewer](../workflows/viewer.qmd) for what the rendered page looks
+like and the available options.

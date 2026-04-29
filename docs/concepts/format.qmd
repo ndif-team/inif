@@ -1,0 +1,144 @@
+---
+title: The INIF Format
+description: The INIF document model — metadata, sequences, samples — and how its parts relate.
+llms-description: Reference for the InifDocument layout — Metadata, Sequence, Sample with tokens/annotations/spans/scores.
+---
+
+INIF stores tokenized LLM generation traces as a JSON-shaped document. The
+shape is defined by a small set of [Pydantic](https://docs.pydantic.dev)
+models in [`inif.models`](../reference/inif.models.qmd) — every other module
+in the library reads, writes, or transforms that shape.
+
+## The document tree
+
+``` text
+InifDocument
+├── metadata          — model info, source eval, packages, timestamps
+├── sequences[]       — deduplicated token patterns shared across samples
+└── samples[]         — tokenized generation traces
+    ├── tokens[]      — TokenOrSeqRef entries (vocab tokens or sequence refs), plus sparse extras
+    ├── annotations[] — named token ranges with optional metadata
+    ├── texts[]       — Text segments ({name, value, start, end, children, metadata})
+    ├── spans[]       — named position ranges
+    └── scores[]      — evaluation scores (scorer, value, answer)
+```
+
+Each top-level field maps directly to a class:
+
+| Field | Class | Notes |
+|---|---|---|
+| `metadata` | `Metadata` | Required. Holds `ModelInfo`, optional `SourceEval`, `packages`, timestamps. |
+| `sequences` | `list[Sequence]` | May be empty. Populated by [sequence deduplication](sequences.qmd). |
+| `samples` | `list[Sample]` | One per generation trace (e.g. one Inspect AI sample). |
+
+## Metadata
+
+`Metadata` describes the producer of the document and the model the trace
+came from. It is required because downstream consumers need at least the
+model name to interpret token ids correctly.
+
+``` python
+from inif import Metadata, ModelInfo
+
+meta = Metadata(
+    model=ModelInfo(name="gpt2", revision="abcdef"),
+    sources=["logs/eval.json"],
+)
+```
+
+Fields that show up in real documents:
+
+- `model` — the only required nested field. Carries `name`,
+  optional `revision`, optional `huggingface_id`, plus free-form
+  `generation_config` and `loading_config` dicts.
+- `source_eval` — `SourceEval` instance with `framework`,
+  `framework_version`, `task`, `eval_id`, `run_id`. Set by the
+  Inspect AI / evaleval converters; absent for ad-hoc text inputs.
+- `packages` — the converters record `inif`, `transformers`, and
+  framework-specific package versions here for reproducibility.
+- `created_at` — `datetime`. Auto-parsed from ISO strings on load,
+  re-emitted as ISO on save.
+
+## Samples
+
+A `Sample` is one self-contained tokenized trace. The required field is
+`id`; everything else is optional and defaults to an empty list / `None`.
+
+| Field | Type | Used for |
+|---|---|---|
+| `id` | `str` | Unique within the document. Int ids (Inspect AI's default) are coerced to `str`. |
+| `tokens` | `list[TokenOrSeqRef]` | The token sequence — vocab tokens, sequence refs, or both. |
+| `texts` | `list[Text]` | Named text segments — one per chat message (with role-based name and a token range), or one per plain-text input. See [Tokens, Texts, and Extras](tokens.qmd#text-segments). |
+| `annotations` | `list[TokenAnnotation]` | Named half-open token ranges. See [Annotations](annotations.qmd). |
+| `spans` | `list[Span]` | Named position lists with optional tags / metadata. |
+| `scores` | `list[SampleScore]` | Per-scorer evaluation results. |
+| `target` | `str \| None` | Single-reference convenience. |
+| `references` | `list[str]` | Full ground-truth list (EEE alignment). |
+| `choices` | `list[str] \| None` | MCQ options when applicable. |
+| `interaction_type` | `str \| None` | `"single_turn"`, `"multi_turn"`, `"agentic"`. |
+| `error` | `str \| None` | API timeout / refusal message. |
+| `sample_hash` | `str \| None` | Cross-model comparison key. |
+| `metadata` | `dict` | Anything else converter-specific. |
+| `total_time`, `input_tokens`, `output_tokens` | numeric | Usage / timing stats. |
+
+The first-class fields (`target`, `references`, `choices`,
+`interaction_type`, `error`, `sample_hash`) match the every_eval_ever
+schema so filters and viewers can read them without reaching into
+`metadata`.
+
+::: {.callout-note appearance="minimal"}
+#### Sample-level validation
+
+Every `Sample` is validated at construction time: `span.positions` and
+`annotation.ranges` must lie within `len(tokens)`, ranges must satisfy
+`0 <= start < end <= n`, and each annotation `name` may appear at most
+once. Out-of-range positions or duplicate annotation names raise
+`ValidationError`. This catches off-by-one bugs in custom converters
+before the document is ever saved.
+:::
+
+## Sequences
+
+A `Sequence` is a token run that appears in *every* sample of a document and
+gets stored once instead of repeating in each sample. Sequence-ref entries
+inside samples are `TokenOrSeqRef` with `id is None`; their `token` field
+carries the shared `Sequence.id`.
+
+``` text
+Sequence(
+    id="seq_0",
+    n_tokens=3,
+    tokens=[TokenOrSeqRef(id=464, token="The"),
+            TokenOrSeqRef(id=3139, token=" capital"),
+            TokenOrSeqRef(id=286, token=" of")],
+)
+```
+
+Both the token strings *and* their ids are stored, so an
+[expansion](sequences.qmd#expansion) round-trips back to a flat document
+that's byte-identical (modulo annotation re-merging) to the input.
+
+## What's not in the format
+
+A few things that look like they could be fields are deliberately not:
+
+- **Logprobs and per-layer activations** live in
+  [token extras](tokens.qmd#extras), not as dedicated fields. The schema
+  documents the conventional names (`logprob`, `logit_lens`) under
+  `$defs.TokenExtras` for external validators.
+- **Chat roles** (`system` / `user` / `assistant`) are stored as
+  [annotations](annotations.qmd), not per-token. A long assistant message
+  doesn't repeat `"role": "assistant"` 800 times.
+- **`total_samples`** is a *computed property* on `InifDocument`
+  (`len(samples)`); it is not stored on disk.
+
+## Reading the spec yourself
+
+The Pydantic models are the source of truth. To regenerate the JSON Schema:
+
+``` bash
+make schema
+```
+
+This writes `schemas/inif.schema.json`, embedding the documented
+`TokenExtras` names under `$defs` for downstream validators.

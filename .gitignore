@@ -8,6 +8,7 @@ logs/
 .junk/**
 junk**
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 *.log
 build/
 dist/
@@ -26,3 +27,5 @@ examples/*.html
 examples/*.inif
 examples/*.json.gz
 examples/*_shards/
+/.quarto/
+**/*.quarto_ipynb

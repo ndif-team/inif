@@ -965,10 +965,10 @@ def test_render_html_message_panels_token_strip_scoped():
 
 
 def test_render_html_messages_panel_skipped_when_no_offsets():
-    """A document whose texts lack start/end falls back to the legacy
-    full-document token strip + ``Texts`` list."""
+    """A document whose texts lack start/end falls back to a single
+    full-document token strip + flat ``Texts`` list."""
     doc = InifDocument(
-        metadata=Metadata(model=ModelInfo(name="legacy")),
+        metadata=Metadata(model=ModelInfo(name="m")),
         samples=[
             Sample(
                 id="l0",
@@ -979,12 +979,12 @@ def test_render_html_messages_panel_skipped_when_no_offsets():
     )
     html = doc.render_html()
     assert '<div class="inif-messages">' not in html
-    # Legacy "Texts" panel is shown as a fallback for old archives.
+    # Flat ``Texts`` panel is shown as the fallback for offset-less docs.
     assert '<div class="inif-texts-panel">' in html
 
 
-def test_render_html_no_legacy_texts_panel_when_messages_render():
-    """When per-message panels are rendered, the legacy ``Texts`` block is
+def test_render_html_no_flat_texts_panel_when_messages_render():
+    """When per-message panels are rendered, the flat ``Texts`` block is
     suppressed to avoid showing the same content twice."""
     html = _make_messages_doc().render_html()
     assert '<div class="inif-texts-panel">' not in html

@@ -1,0 +1,211 @@
+---
+title: Inspect AI Converter
+description: Convert Inspect AI EvalLog objects and .eval files into INIF documents.
+llms-description: from_eval_log / from_eval_file convert Inspect AI eval logs; per-token logprobs, "generated", "reasoning", and "tool_call" annotations attach automatically when available.
+---
+
+Inspect AI is the primary upstream the format was designed around — the
+converter preserves messages, scores, generation config, eval / run ids,
+per-token logprobs, the model's response region as a `generated`
+annotation, and any reasoning / tool-call sections detected inside the
+chat template.
+
+``` python
+from inif.converters.inspect_ai import from_eval_log, from_eval_file
+```
+
+Requires the `inspect` extra:
+
+``` bash
+pip install "inif[inspect]"
+```
+
+## `from_eval_file`
+
+The thin wrapper for the file-based case:
+
+``` python
+from inif.converters.inspect_ai import from_eval_file
+
+doc = from_eval_file("logs/run.eval")
+```
+
+It calls `inspect_ai.log.read_eval_log(path)` then forwards to
+`from_eval_log`. The source path is appended to `metadata.sources`.
+
+## `from_eval_log`
+
+The full-fat entry point. Pass an `inspect_ai.log.EvalLog` you already
+have in memory:
+
+``` python
+from inspect_ai.log import read_eval_log
+from inif.converters.inspect_ai import from_eval_log
+
+eval_log = read_eval_log("logs/run.eval")
+doc = from_eval_log(eval_log, tokenizer="meta-llama/Llama-3.1-8B")
+```
+
+| Arg | Default | Effect |
+|---|---|---|
+| `tokenizer` | `"auto"` | See [Tokenizer resolution](tokenizers.qmd). |
+| `include_messages` | `True` | Include per-message text segments on `Sample.texts`. |
+| `deduplicate` | `True` | Run [sequence dedup](../concepts/sequences.qmd). |
+| `min_sequence_length` | `5` | Minimum n-gram length for dedup. |
+| `tag_chat_roles` | `True` | Annotate `system` / `user` / `assistant` / `tool` / `template`. |
+| `tag_generated` | `True` | Tag the model's response with `"generated"` (last assistant message). |
+| `tag_reasoning` | `True` | Annotate reasoning and tool-call renderings (`"reasoning"`, `"tool_call"`). |
+| `extract_logprobs` | `True` | Attach per-token logprobs when the eval log carries them. |
+
+## What gets preserved
+
+### Per-sample fields
+
+| `Sample` field | Inspect AI source |
+|---|---|
+| `id` | `inspect_sample.id` (coerced to str). |
+| `texts` | One `Text` per message extracted from `inspect_sample.messages`, with token offsets and per-section children for assistant turns (reasoning / content / tool_calls). |
+| `tokens` | `tokenizer.apply_chat_template(messages, tokenize=True)`. |
+| `scores` | `inspect_sample.scores` — one `SampleScore` per scorer. |
+| `target` | `str(inspect_sample.target)` if present. |
+| `input_tokens`, `output_tokens` | `inspect_sample.usage.input_tokens` / `.output_tokens`. |
+
+### Document metadata
+
+| `Metadata` field | Inspect AI source |
+|---|---|
+| `model.name` | `eval_log.eval.model`. |
+| `model.revision` | Tokenizer's `_commit_hash` when available. |
+| `model.generation_config` | Merged from `eval_log.plan.config` and `eval_log.eval.model_generate_config` — captures every non-None `GenerateConfig` field (sampling: `max_tokens` / `temperature` / `top_p` / `top_k` / `seed` / `stop_seqs` / `frequency_penalty` / `presence_penalty` / `best_of` / `logit_bias`; reasoning: `reasoning_effort` / `reasoning_tokens` / `reasoning_summary` / `reasoning_history`; tool use: `parallel_tool_calls` / `max_tool_output`; transport: `max_connections` / `max_retries` / `timeout`; plus `extra_headers` / `extra_body` / `response_schema` / `modalities` / …). Always includes `preserve_reasoning: True` (see callout below). |
+| `source_eval.extra` | Eval-time run options: `eval_config` (sample / message / token / time / cost limits, epochs, error-handling), plus `task_args`, `solver`, `solver_args`, `model_args` when set. |
+| `source_eval` | `framework="inspect_ai"`, plus `framework_version`, `task`, `task_version`, `eval_id`, `run_id`. |
+| `total_time` | `(eval_log.stats.completed_at - started_at).total_seconds()`. |
+| `packages` | `inif`, `transformers`, `inspect_ai` versions. |
+
+## Annotations
+
+With the defaults, every sample gets:
+
+- **Chat role annotations** (`tag_chat_roles=True`): `user`, `assistant`,
+  `system`, `tool`, and `template` ranges via character-span matching
+  against the formatted chat template. Best-effort: silently skipped when
+  a tokenizer's per-token decode doesn't round-trip.
+- **`generated` annotation** (`tag_generated=True`): covers the last
+  assistant message — the model's actual response — with
+  `metadata={"source": "converter"}`.
+- **`reasoning` / `tool_call` annotations** (`tag_reasoning=True`): for
+  every assistant message that emitted reasoning or tool calls, the chars
+  the chat template rendered for those sections are detected via a
+  render-with-vs-without diff and tagged. Tokens in the diff window pick
+  up both the field's annotation (`reasoning` / `tool_call`) and the
+  message's role (`assistant`), moving out of `template` if
+  `tag_chat_roles` had labelled them there. Fully model-agnostic — the
+  chat template itself decides where each field renders.
+
+The `generated` annotation is added *before* sequence deduplication so the
+response region never collapses into a shared sequence (annotations block
+dedup). Reasoning / tool_call are added *after* dedup, since they only
+need to reflect the final tokenization.
+
+::: {.callout-note appearance="minimal"}
+#### Reasoning routing
+
+`_extract_message_dicts` separates reasoning from `content` and routes it
+through the chat template's native `reasoning_content` slot (passed as
+both `reasoning` and `reasoning_content` keys for templates that pick
+either one). `render_chat_template` always passes `preserve_thinking=True`
+so chat templates that strip reasoning from history (Kimi-style) preserve
+it for analysis. Templates that don't recognise the kwarg silently ignore
+it.
+
+Some templates (Qwen3-family) instead hardcode reasoning rendering behind
+a `loop.index0 > ns.last_query_index` Jinja gate that no kwarg can flip —
+without intervention every historical assistant has its `<think>...</think>`
+block stripped from the rendered output. INIF rewrites the gate to `true`
+in `_patch_template_preserve_reasoning` before calling
+`apply_chat_template`, so every assistant's reasoning lands in the token
+stream regardless of position. The transformation is recorded as
+`Metadata.model.generation_config["preserve_reasoning"] = True` —
+downstream interpretability pipelines that need to replay what the model
+actually saw at turn N must reapply the original gating themselves. The
+patch is a no-op for templates that don't contain the `last_query_index`
+pattern (Kimi, GPT, Llama, Gemma, …).
+:::
+
+## Per-token logprobs
+
+When the eval log includes choice logprobs
+(`output.choices[0].logprobs.content`) and `extract_logprobs=True`, the
+per-token logprobs are attached to the response tokens via
+`set_extra("logprob", lp)`. The viewer renders them as hover tooltips and
+underline indicators.
+
+This is best-effort: when the eval-source tokenization disagrees with the
+configured tokenizer on token count, the logprobs are silently skipped
+rather than mis-aligned. To force a match, pass the tokenizer that
+produced the original logprobs.
+
+## Decoding strategy
+
+The converter picks one decode path per archive (not per sample) based on
+what the tokenizer supports:
+
+1. **Offset mapping** — fast tokenizers exposing
+   `return_offsets_mapping`. Per-token strings are exact slices of the
+   formatted template. Multi-byte UTF-8 characters split across byte-level
+   tokens (e.g. `♠` U+2660 → 2 tokens on Qwen3.5) report identical
+   `(start, end)` offsets on every fragment; the decoder tracks
+   `last_consumed` so the character is emitted by the first fragment and
+   subsequent fragments yield `""`. A final
+   `"".join(pieces) == formatted` integrity check returns `None` on any
+   remaining mismatch so the converter falls back to the next tier.
+2. **Byte-level slicing** — byte-level BPE tokenizers (e.g. Kimi's
+   tiktoken variant) without offset support. Rebuilds per-token bytes via
+   `tokenizer.byte_decoder` + `encoder`.
+3. **Per-token decode with cache** — fallback for tokenizers with neither
+   of the above. May produce U+FFFD for multi-byte characters split
+   across BPE tokens; chat-role tagging silently skips affected samples.
+
+The choice is probed once on the first sample and reused, so the cost is
+amortized across the whole conversion.
+
+## Common patterns
+
+### Convert one file
+
+``` python
+from inif.converters.inspect_ai import from_eval_file
+
+doc = from_eval_file("logs/run.eval")
+doc.save("run.inif.json")
+```
+
+### Override the tokenizer
+
+``` python
+doc = from_eval_file("logs/run.eval", tokenizer="meta-llama/Llama-3.1-8B")
+```
+
+A `UserWarning` is emitted if the tokenizer disagrees with the eval log's
+model id. The warning is informational only — the conversion proceeds.
+
+### Batch from the CLI
+
+``` bash
+inif convert eval logs/*.eval
+```
+
+Each input writes to its own output file in the same directory.
+
+### Filter to failing samples after conversion
+
+``` python
+failures = doc.filter_samples_by_score(
+    "exact_match", predicate=lambda v: v == 0
+)
+mini_doc = doc.subset(lambda s: s.id in {f.id for f in failures})
+```
+
+Use `subset` (not just `filter_samples`) when you want the result to be a
+self-contained document with its sequence list pruned to references in the
+kept samples.

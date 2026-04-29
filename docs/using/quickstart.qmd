@@ -1,0 +1,95 @@
+---
+title: Quickstart
+description: Build, save, view, and load an INIF document in five minutes.
+llms-description: End-to-end walkthrough — tokenize text, save as .inif.json, render the HTML viewer, reload.
+---
+
+A five-minute tour of the most common INIF flow: take some text, tokenize it,
+look at the result in the browser, then load it back into Python.
+
+## 1. Build a document from text
+
+[`from_texts`](../converters/text.qmd) tokenizes one or more strings (or chat
+message lists) with a HuggingFace tokenizer and returns an
+[`InifDocument`](../concepts/format.qmd):
+
+``` python
+from inif.converters.text import from_texts
+
+doc = from_texts(
+    texts=[
+        "The capital of France is Paris.",
+        "The capital of Italy is Rome.",
+        "The capital of Spain is Madrid.",
+    ],
+    tokenizer="gpt2",
+)
+print(doc.total_samples)            # 3
+print(len(doc.sequences))           # 1 — "The capital of" is shared
+```
+
+The shared `"The capital of"` prefix is automatically detected and stored once
+as a [`Sequence`](../concepts/sequences.qmd); each sample replaces that run
+with a single sequence-ref token.
+
+## 2. Save to disk
+
+INIF supports two on-disk formats. The suffix decides which one is used.
+
+``` python
+doc.save("capitals.inif.json")     # plain JSON, human-readable
+doc.save("capitals.inif")          # indexed compressed archive
+```
+
+::: {.callout-tip appearance="minimal"}
+#### Which format should I pick?
+
+`.inif.json` is the right default while you're exploring — diffs cleanly,
+opens in any editor, easy to inspect. Switch to `.inif` for large documents
+where you want random access, header-only reads, or streaming writes; see
+[Saving and loading](../workflows/io.qmd) for the full rationale.
+:::
+
+## 3. View in the browser
+
+The HTML viewer is a single self-contained file — no server needed:
+
+``` bash
+inif view capitals.inif.json
+```
+
+Or from Python (Jupyter shows it inline):
+
+``` python
+doc.show()                                    # Jupyter
+doc.save_html("capitals.html")                # standalone HTML
+```
+
+Tokens are rendered with hover tooltips for every extra field, annotations
+are highlighted with a color legend, and the sidebar lists all samples.
+
+## 4. Load it back
+
+`InifDocument.load` is the symmetric counterpart of `save`:
+
+``` python
+from inif import InifDocument
+
+doc = InifDocument.load("capitals.inif.json")
+sample = doc.get_sample("sample_0")
+print(len(sample.tokens))
+```
+
+For the indexed archive, you can also read just the header or pick a single
+sample without inflating the whole file — see
+[Saving and loading](../workflows/io.qmd#indexed-archive).
+
+## Where to go next
+
+- [The INIF format](../concepts/format.qmd) — the document model in detail.
+- [Tokens, Texts, and Extras](../concepts/tokens.qmd) — what a `TokenOrSeqRef`
+  carries.
+- [Annotations and tagging](../workflows/tagging.qmd) — labelling token
+  ranges with regex, predicates, or chat roles.
+- [Inspect AI conversion](../converters/inspect_ai.qmd) — building INIF from
+  real eval logs.

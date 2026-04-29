@@ -1,0 +1,20 @@
+---
+title: inif.converters.evaleval
+description: Convert every_eval_ever instance-level records into INIF documents.
+reference: inif.converters.evaleval
+---
+
+Targets the `instance_level_eval_0.2.2` schema used by the
+[`evaleval/EEE_datastore`](https://huggingface.co/datasets/evaleval/EEE_datastore)
+HuggingFace dataset. The HF entry point requires the `evaleval` extra
+(`pip install "inif[evaleval]"`); local JSON / JSONL conversion does not.
+See [the evaleval converter guide](../converters/evaleval.qmd) for the
+field-mapping table, scoring, and metadata promotion rules.
+
+## Entry points
+
+### from_instance_records
+
+### from_eval_json
+
+### from_hf_dataset

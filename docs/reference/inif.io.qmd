@@ -1,0 +1,26 @@
+---
+title: inif.io
+description: Path-based readers for INIF documents — unified across .inif and .inif.json.
+reference: inif.io
+---
+
+The path-based unified read API in `inif.io` works on both formats —
+`.inif` indexed archives and plain `.inif.json` files. Pass any supported
+path; the dispatcher routes to the indexed-archive readers or to the full
+document loader as appropriate.
+
+For symmetric save / load / `to_dict` / `from_dict` see the methods on
+[`InifDocument`](inif.models.qmd) — those are the entry points for the
+common write / read cycle. The lower-level indexed-archive options
+(custom compression, partial loads) live in
+[`inif.indexed`](inif.indexed.qmd).
+
+## Unified read API
+
+### iter_samples
+
+### read_samples
+
+### read_info
+
+### DocumentInfo

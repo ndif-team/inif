@@ -1,0 +1,27 @@
+---
+title: inif.tagging
+description: Type aliases and modes for the tagging methods on Sample / InifDocument.
+reference: inif.tagging
+---
+
+Tagging is exposed as methods on [`Sample`](inif.models.qmd) and
+[`InifDocument`](inif.models.qmd) — `tag_by_regex`, `tag_by_regexes`,
+`tag_by_text_regex`, `tag_by_predicate`, `tag_by_predicates`,
+`tag_chat_roles`, `tag_special_tokens`, `create_span_from_tag`. This
+module re-exports the supporting types so callers building up batched
+tagger lists can spell them out.
+
+See [Tagging tokens](../workflows/tagging.qmd) for usage patterns and the
+difference between token-string and concatenated-text matching.
+
+## Modes
+
+### TextTagMode
+
+## Type aliases
+
+### RegexTag
+
+### PredicateTag
+
+### TokenPredicate

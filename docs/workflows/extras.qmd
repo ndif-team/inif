@@ -1,0 +1,158 @@
+---
+title: Storing Interpretability Outputs
+description: Attaching per-token interpretability data — logprobs, logit-lens, probe scores — via the TokenOrSeqRef extras API.
+llms-description: Use TokenOrSeqRef.set_extra/get_extra to attach sparse per-token data; conventional names are logprob and logit_lens; extras block sequence dedup.
+---
+
+INIF is designed to store the *outputs* of interpretability experiments
+alongside the tokens they describe. The mechanism is the
+[`TokenOrSeqRef` extras](../concepts/tokens.qmd#extras) API — a flexible per-token bag
+that survives serialization and is recognised by the HTML viewer.
+
+This page collects the recipes that come up when wiring an interpretability
+pipeline to write into INIF.
+
+## The basic write/read cycle
+
+``` python
+from inif import InifDocument
+
+doc = InifDocument.load("traces.inif.json")
+
+# Compute and write
+sample = doc.get_sample("sample_0")
+for pos, token in enumerate(sample.tokens):
+    if token.is_sequence_ref:
+        continue
+    score = my_probe(token.id, pos)
+    token.set_extra("probe_score", float(score))
+
+doc.save("traces.with_probe.inif.json")
+```
+
+`set_extra` keeps `__dict__` and `model_extra` in sync, so the value both
+serializes correctly *and* is reachable via attribute access on the in-memory
+object. Use `get_extra(key, default)` to read back without crashing on
+missing keys.
+
+## Conventional names
+
+The schema documents a small set of conventional extra names under
+`$defs.TokenExtras` so external validators / viewers know what to expect:
+
+| Name | Type | Producer |
+|---|---|---|
+| `logprob` | `float` | Per-token logprob from the model. Auto-attached by [`from_eval_log`](../converters/inspect_ai.qmd) when the eval log includes choice logprobs. |
+| `logit_lens` | `dict` | Per-layer logit-lens output keyed by layer name. Set by interpretability tooling (e.g. nnterp). |
+
+Anything else — `probe_score`, `attention_entropy`, `gradient_norm`,
+`steering_alpha` — is fair game under whatever name you pick. The viewer
+will give it an underline color and a hover tooltip automatically.
+
+## Writing into sequence-ref positions
+
+Sequence refs collapse a run of identical tokens across samples into a
+single `Sequence`. If your computation needs to write to position `p` and
+that position currently lives inside a ref, expand only that ref:
+
+``` python
+actual_index, real_token = sample.materialize_position(p, doc.sequences)
+real_token.set_extra("probe_score", 0.42)
+```
+
+`materialize_position` expands the *containing* ref in place and leaves the
+sample's other refs untouched. The returned index is where the position
+landed in `sample.tokens` after expansion — use that for any subsequent
+neighbouring writes.
+
+For pipelines that will write to *every* position immediately, expand the
+whole document up front:
+
+``` python
+doc = doc.expand_sequences()
+```
+
+Then iterate over the flat samples directly. `expand_sequences` returns a
+new document — the input is not mutated.
+
+## Why dedup runs *after* extras would defeat the purpose
+
+[Sequence deduplication](../concepts/sequences.qmd) skips tokens that carry
+extras — running it on a document where every position already has a
+logprob will collapse nothing. The intended ordering is:
+
+1. Build the document (text / Inspect / evaleval converter, dedup runs by default).
+2. Save it (small file).
+3. Run interpretability tools that materialize specific positions and write
+   their outputs as extras.
+4. Save the enriched copy under a new name.
+
+Re-running dedup at step 4 is fine but won't do anything new — extras-laden
+positions are exempt by design.
+
+## Writing logit-lens output
+
+A typical logit-lens write attaches one dict per token, keyed by layer name:
+
+``` python
+for pos, token in enumerate(sample.tokens):
+    if token.is_sequence_ref:
+        continue
+    per_layer = {
+        f"layer_{layer}": top_token_str_at(layer, pos)
+        for layer in range(num_layers)
+    }
+    token.set_extra("logit_lens", per_layer)
+```
+
+The viewer renders each `logit_lens` value as a hover tooltip — no
+additional configuration needed.
+
+## Writing many extras to many tokens efficiently
+
+For corpus-scale annotation passes, the per-token Pydantic round-trip cost
+adds up. Two strategies:
+
+1. **Iterate per sample, write per token, save once**. The pattern at the
+   top of this page. Simple and good enough up to ~100k tokens.
+
+2. **Use [`FlatTokenStore`](../reference/inif.flat.qmd) for the scan, then
+   write back through `materialize_position`**. The flat store gives
+   bulk-array semantics for *finding* positions; the writes themselves
+   still go through the regular `TokenOrSeqRef` API.
+
+``` python
+from inif.flat import FlatTokenStore
+
+store = FlatTokenStore.from_document(doc)
+positions = store.find_regexes([(r"^\d+$", "number")])
+
+for sample_id, local_pos in (
+    store.sample_position(p) for p in positions["number"]
+):
+    sample = doc.get_sample(sample_id)
+    actual_index, token = sample.materialize_position(local_pos, doc.sequences)
+    token.set_extra("is_number_run", True)
+```
+
+## Reading extras back
+
+`TokenOrSeqRef.extras` returns a snapshot dict of all extras on the token —
+convenient for inspection and serialization-aware comparisons. Per-key
+reads use `get_extra` / `has_extra`:
+
+``` python
+for token in sample.tokens:
+    if token.has_extra("probe_score"):
+        print(token.token, token.get_extra("probe_score"))
+```
+
+## Removing extras
+
+``` python
+val = token.pop_extra("probe_score")        # remove + return
+val = token.pop_extra("missing", default=0) # safe with default
+```
+
+`pop_extra` removes the key from both `__dict__` and `model_extra`,
+mirroring `set_extra`.

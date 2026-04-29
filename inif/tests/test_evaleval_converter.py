@@ -346,7 +346,7 @@ def test_tier1_fields_populate_from_record():
     assert s.error is None
     assert s.interaction_type == "single_turn"
     assert s.references == ["4"]
-    # First-class fields no longer leak into metadata
+    # First-class fields are not duplicated into metadata
     promoted_fields = (
         "interaction_type",
         "error",

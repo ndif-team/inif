@@ -1,0 +1,14 @@
+---
+title: inif.flat
+description: Flat parallel-array view of an InifDocument for high-throughput scans.
+reference: inif.flat
+---
+
+`FlatTokenStore` is an analysis representation, not a replacement file
+format. It exposes flat parallel arrays of token ids, strings, sequence
+provenance, and sparse annotations — useful when you need to scan tokens
+across samples without reconstructing Pydantic objects per token.
+
+## Store
+
+### FlatTokenStore

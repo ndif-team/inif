@@ -1,0 +1,139 @@
+---
+title: Annotations and Spans
+description: Two ways INIF labels token regions — TokenAnnotation for repeated named ranges, Span for free-form position lists.
+llms-description: Annotations are named half-open token ranges with optional metadata, automatically merged when metadata matches; Spans are unordered position lists with tags and metadata.
+---
+
+INIF has two parallel mechanisms for labelling token regions, each fitting a
+different use case:
+
+| | `TokenAnnotation` | `Span` |
+|---|---|---|
+| Geometry | Half-open ranges `[start, end)` | Free position list |
+| Identity | Named (`name`) | Named (`name`) |
+| Auto-merge | Yes — adjacent / overlapping ranges with identical metadata are merged | No — each `Span` stands alone |
+| Used for | Roles, "generated", "reasoning", "tool_call", regex tags | Ad-hoc bookmarks, answer locations |
+| Created via | `sample.annotate(...)`, [tagging methods](../workflows/tagging.qmd) | Manual / `sample.create_span_from_tag(...)` |
+
+You almost always want annotations. Spans are the escape hatch for the
+cases where the named-range model doesn't fit.
+
+## TokenAnnotation
+
+Annotations live on `Sample.annotations` as
+`{name, ranges, metadata}` records. `ranges` are half-open: `(0, 5)` covers
+positions 0 through 4. Each annotation `name` appears at most once per
+sample — repeated calls under the same name extend that single entry's
+ranges rather than creating a duplicate.
+
+``` python
+from inif import Sample, TokenAnnotation, TokenOrSeqRef
+
+sample = Sample(
+    id="0",
+    tokens=[TokenOrSeqRef(id=i, token=f"t{i}") for i in range(10)],
+    annotations=[
+        TokenAnnotation(name="generated", ranges=[(5, 10)]),
+        TokenAnnotation(name="user", ranges=[(0, 5)]),
+    ],
+)
+```
+
+The validator enforces `0 <= start < end <= n_tokens` and rejects
+zero-length or inverted ranges at construction time. Out-of-range
+annotations raise `ValidationError` — never quietly truncated. Duplicate
+annotation names in the constructor input also raise.
+
+### Auto-merge
+
+`Sample.annotate(name, ranges, metadata=None)` is the right entry point for
+new annotations. It:
+
+1. Sorts and merges adjacent / overlapping ranges in the input.
+2. Looks for an existing annotation with the same `name`.
+3. If found, extends that record's ranges (re-merged); the existing
+   metadata is preserved (a different `metadata` on a follow-up call is a
+   silent no-op for the metadata field — only ranges merge).
+4. Otherwise, appends a new annotation.
+
+This is why a chat-role tagger can record three "assistant" turns on a
+sample and end up with a single annotation whose `ranges` cover all three
+regions.
+
+::: {.callout-note appearance="minimal"}
+#### One annotation per name
+
+There is exactly one annotation entry per name on a sample. Provenance
+that needs distinguishing should ride in the `metadata` of the merged
+annotation, or use a distinct `name`.
+:::
+
+### Helper methods
+
+| Method | Returns | Purpose |
+|---|---|---|
+| `sample.annotate(name, ranges, metadata=None)` | The merged `TokenAnnotation` | Add a new range (or extend the existing entry). |
+| `sample.annotate_positions(name, positions, metadata=None)` | The merged `TokenAnnotation` | Add a name to specific positions; runs are auto-coalesced into ranges. |
+| `sample.annotation_positions(name)` | `list[int]` | Flat sorted position list across all ranges. |
+| `sample.remove_annotation(name)` | `None` | Drop the annotation with this name. |
+| `doc.remove_annotation(name)` | `None` | Drop the annotation across every sample. |
+
+## Span
+
+`Span` is a flatter structure for cases where a region isn't naturally a
+range — multiple non-contiguous answer positions, scoring bookmarks,
+bookkeeping for downstream tools:
+
+``` python
+from inif import Span
+
+span = Span(
+    name="answer_positions",
+    positions=[5, 7, 12, 13],
+    tags=["mcq_answer"],
+    metadata={"scorer": "exact_match"},
+)
+```
+
+Unlike annotations, spans never auto-merge — adding a second span with the
+same name produces two `Span` objects on `sample.spans`.
+
+### Spans from annotations
+
+To convert an annotation into a span (e.g. for tooling that consumes spans
+specifically), use `Sample.create_span_from_tag`:
+
+``` python
+sample.create_span_from_tag("city", "answer_span")
+```
+
+The created span carries the original tag in its `tags` list and the
+flattened position list of every range carrying that name.
+
+## What annotations are used for in practice
+
+The library's own conventions for the `name` field:
+
+| Name | Source | Meaning |
+|---|---|---|
+| `system`, `user`, `assistant`, `tool`, `template` | `Sample.tag_chat_roles` / `InifDocument.tag_chat_roles` | Per-message chat-template role. `template` covers delimiters and auto-generated text. |
+| `generated` | `tag_generated=True` on the eval converters | The model's response — last assistant message. |
+| `reasoning` | `tag_reasoning=True` on the eval converters | Reasoning-trace span detected via render-with-vs-without diff. |
+| `tool_call` | `tag_reasoning=True` on the eval converters (yes — the same flag covers both) | Tool-call rendering inside the chat template. |
+| `special` | `Sample.tag_special_tokens` | Special tokens (BOS, EOS, etc.). |
+| Custom | `tag_by_regex`, `tag_by_text_regex`, `tag_by_predicate` | Whatever you label. |
+
+These names are not reserved — you can override or replace them — but the
+[HTML viewer](../workflows/viewer.qmd) gives the chat roles and reasoning /
+tool_call sub-text annotations stable colors so they're easy to spot.
+
+## Range geometry quick reference
+
+- Ranges are **half-open**: `(0, 5)` covers positions `0, 1, 2, 3, 4`.
+- Ranges with `start >= end` are rejected.
+- Ranges outside `[0, n_tokens]` are rejected.
+- Adjacent or overlapping ranges *with identical metadata* are merged when
+  added via `Sample.annotate` or `Sample.annotate_positions`. They are
+  *also* re-merged on construction by the model validator.
+- Position lists handed to `annotate_positions` are de-duped, sorted, and
+  coalesced into runs — `[0, 1, 2, 5, 6]` becomes `[(0, 3), (5, 7)]`.

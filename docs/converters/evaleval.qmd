@@ -1,0 +1,203 @@
+---
+title: every_eval_ever Converter
+description: Convert evaleval instance-level records into INIF documents — local files or via the EEE_datastore HuggingFace dataset.
+llms-description: from_instance_records / from_eval_json / from_hf_dataset convert EEE schema records; preserves multi-turn, tool calls, reasoning traces, and aggregate metric metadata.
+---
+
+[every_eval_ever](https://github.com/evaleval/every_eval_ever) (EEE) is a
+schema for normalising eval traces across frameworks (Inspect AI, HELM,
+lm-eval-harness). The
+[`evaleval/EEE_datastore`](https://huggingface.co/datasets/evaleval/EEE_datastore)
+HuggingFace dataset bundles real traces under that schema. This converter
+takes EEE records and produces INIF.
+
+``` python
+from inif.converters.evaleval import (
+    from_instance_records,
+    from_eval_json,
+    from_hf_dataset,
+)
+```
+
+The HF route requires the `evaleval` extra:
+
+``` bash
+pip install "inif[evaleval]"
+```
+
+Local JSON / JSONL conversion does not.
+
+## Three entry points
+
+### `from_instance_records` (core)
+
+The primitive — give it a list of EEE-schema dicts:
+
+``` python
+from inif.converters.evaleval import from_instance_records
+
+doc = from_instance_records(records, aggregate=optional_aggregate)
+```
+
+| Arg | Default | Effect |
+|---|---|---|
+| `records` | required | List of `instance_level_eval_0.2.2` dicts. |
+| `aggregate` | `None` | Optional aggregate (`eval.schema.json`) record contributing model developer info, eval library version, and metric config. |
+| `tokenizer` | `"auto"` | See [Tokenizer resolution](tokenizers.qmd). |
+| `include_messages` | `True` | Include message texts on each `Sample`. |
+| `deduplicate` | `True` | Run [sequence dedup](../concepts/sequences.qmd). |
+| `min_sequence_length` | `5` | Minimum n-gram length. |
+| `tag_chat_roles` | `True` | Add chat-role annotations. |
+| `tag_generated` | `True` | Annotate the last assistant message with `"generated"`. |
+| `tag_reasoning` | `True` | Annotate reasoning and tool-call renderings. |
+
+### `from_eval_json` (local files)
+
+For the case where the records live on disk:
+
+``` python
+from inif.converters.evaleval import from_eval_json
+
+doc = from_eval_json(
+    aggregate_path="eval.json",      # optional
+    instances_path="instances.jsonl",
+)
+```
+
+`instances_path` accepts either a JSON file containing a list of records
+or a `.jsonl` file with one record per line. The filenames are appended to
+`metadata.sources`.
+
+### `from_hf_dataset` (HuggingFace streaming)
+
+Stream records from `evaleval/EEE_datastore` (or another EEE-format repo):
+
+``` python
+from inif.converters.evaleval import from_hf_dataset
+
+doc = from_hf_dataset(
+    config="theory_of_mind_samples",
+    aggregate_config="theory_of_mind",   # optional aggregate
+    limit=200,                           # optional cap
+)
+```
+
+| Arg | Default | Effect |
+|---|---|---|
+| `config` | required | EEE config name (typically ending in `_samples`). |
+| `split` | `"samples"` | Dataset split for instance records. |
+| `aggregate_config` | `None` | Paired aggregate config (without `_samples` suffix). |
+| `aggregate_split` | `"train"` | Split for the aggregate. |
+| `repo` | `evaleval/EEE_datastore` | HF repo id. |
+| `limit` | `None` | Cap the number of records converted. |
+| `revision` | `None` | HF dataset revision / commit. |
+| `**kwargs` | — | Forwarded to `from_instance_records`. |
+
+The records are streamed (not downloaded in full); `limit` caps the
+iteration.
+
+## Interaction types
+
+EEE records carry an `interaction_type` field driving how messages are
+materialized:
+
+- `single_turn` — one synthesised `user` message (`input.raw`) plus one
+  `assistant` message; per-turn `reasoning_trace` is routed through the
+  chat template's native `reasoning_content` slot.
+- `multi_turn` / `agentic` — uses the record's `messages[]` array directly,
+  ordered by `turn_idx`. Reasoning rides on the same `reasoning_content`
+  slot. `tool_calls` are rendered as compact
+  `<tool_call name=... args={...}/>` suffixes inside the assistant content
+  so tool invocations survive into the tokenized stream even when the
+  chat template doesn't render the structured `tool_calls` field.
+
+::: {.callout-note appearance="minimal"}
+#### No system message synthesis
+
+The converter does not invent a `system` message. If one exists in
+`messages[]` it is preserved; single-turn records have no slot for one in
+the EEE schema, so they end up without one.
+:::
+
+## Reasoning and tool-call traces
+
+When `tag_reasoning=True` (the default), the shared
+`tag_template_field_renderings` helper detects each per-message structured
+field by rendering the chat template twice — once with the field, once
+without — and annotates the diff window. Tokens in the window get the
+field's annotation (`reasoning` / `tool_call`) and the message's role
+(`assistant`), moving out of `template` if `tag_chat_roles` had labelled
+them there.
+
+Fully model-agnostic: the chat template itself decides where each field
+renders. For `tool_calls`, the diff naturally captures the entire
+`<|tool_calls_section_begin|>…<|tool_calls_section_end|>` block (or
+equivalent) because the wrapper only emits when the field is present. For
+reasoning with always-on wrappers (`<think>{rc}</think>`), the diff is just
+the reasoning content; the wrapper markers remain `template`.
+
+This is best-effort: silently skipped when the tokenizer's per-token
+decode doesn't round-trip to `apply_chat_template`.
+
+## First-class `Sample` fields
+
+The EEE-aligned fields live directly on `Sample` so filters, viewers, and
+downstream tools can read them without reaching into `metadata`:
+
+| `Sample` field | EEE source |
+|---|---|
+| `target` | `input.reference[0]` (only when length 1). |
+| `references` | `input.reference` (the full list). |
+| `choices` | `input.choices`. |
+| `interaction_type` | `record.interaction_type`. |
+| `error` | `record.error`. |
+| `sample_hash` | `record.sample_hash`. |
+| `input_tokens`, `output_tokens` | `record.token_usage.input_tokens` / `.output_tokens`. |
+
+Everything else lands under `Sample.metadata`: `formatted_input`,
+`num_turns`, `tool_calls_count`, `reasoning_tokens`, `performance`, the
+EEE per-record `metadata` block (under `eval_metadata`), and the
+non-terminal `answer_attribution` entries (under `intermediate_answers`).
+
+## Scoring
+
+`SampleScore` is built from `evaluation.score`:
+
+- `scorer = evaluation_name`.
+- `value = evaluation.score`.
+- `answer = terminal_attribution.extracted_value` (the
+  `answer_attribution` entry whose `is_terminal=True`).
+- `metadata = {"is_correct", "extraction_method", "source"}` from the
+  evaluation block + terminal attribution.
+
+Non-terminal `answer_attribution` entries are kept under
+`Sample.metadata["intermediate_answers"]`.
+
+## Document-level metadata
+
+When an aggregate record is supplied, the following land on
+`Metadata.extra`:
+
+- `inference` — `developer`, `inference_platform`, `inference_engine`
+  from the aggregate's `model_info`.
+- `eval_library` — full `eval_library` block from the aggregate.
+- `metric_config` — the matching `evaluation_results[*].metric_config`
+  (matched by `evaluation_result_id`, fallback to first).
+- `aggregate_score` — the matching `evaluation_results[*].score_details`.
+
+`SourceEval` is set with `framework="evaleval"`, `framework_version` from
+`schema_version`, plus `task`, `eval_id`, `run_id`.
+
+## Tokenizer mismatch warnings
+
+The converter resolves the tokenizer via the same rules as Inspect (see
+[Tokenizer resolution](tokenizers.qmd)). The "source model id" comes from
+the aggregate's `model_info.id` / `name` first, then the first record's
+`model_id`. Closed-source ids (`openai/gpt-4`, etc.) require an explicit
+HF stand-in.
+
+## Schema validation
+
+The converter trusts the EEE schema as-is. To validate inputs against the
+upstream JSON Schema before conversion, run your own jsonschema check on
+the records — neither this converter nor INIF itself does that for you.

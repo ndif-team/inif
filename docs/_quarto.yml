@@ -2,10 +2,41 @@ project:
   type: meridianlabs-ai/inspect-docs
 
 inspect-docs:
-  title: "INIF"
-  description: "Interpretability Interchange Format"
+  title: INIF
+  description: |
+    INterpretability Interchange Format — a JSON-based format for tokenized
+    LLM generation traces with token annotations, position selection, and
+    storage of interpretability outputs.
   url: https://inif.ndif.us
+  module: inif
+  cli: inif
   repo: ndif-team/inif
   org: National Deep Inference Fabric
-
-
+  navigation:
+    - text: Getting Started
+      contents:
+        - href: index.qmd
+        - href: using/install.qmd
+        - href: using/quickstart.qmd
+    - text: Concepts
+      contents:
+        - href: concepts/format.qmd
+        - href: concepts/tokens.qmd
+        - href: concepts/sequences.qmd
+        - href: concepts/annotations.qmd
+        - href: concepts/selection.qmd
+    - text: Workflows
+      contents:
+        - href: workflows/io.qmd
+        - href: workflows/tagging.qmd
+        - href: workflows/extras.qmd
+        - href: workflows/viewer.qmd
+        - href: workflows/cli.qmd
+    - text: Converters
+      contents:
+        - href: converters/index.qmd
+        - href: converters/text.qmd
+        - href: converters/inspect_ai.qmd
+        - href: converters/evaleval.qmd
+        - href: converters/tokenizers.qmd
+  sidebar: unified

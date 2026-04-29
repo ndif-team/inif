@@ -1,0 +1,194 @@
+---
+title: Tokens, Texts, and Extras
+description: How INIF represents individual tokens, named text segments, and the extras API for sparse per-token data.
+llms-description: TokenOrSeqRef carries vocab tokens (id is int) and sequence refs (id is None, token holds the seq id); Text wraps named text segments with token offsets and optional children for assistant sub-sections; get_extra/set_extra hold per-token logprobs and interpretability outputs.
+---
+
+A `TokenOrSeqRef` is the atomic unit of an INIF sample — a single Pydantic
+class that covers both vocabulary tokens and sequence references. It carries
+two concrete fields plus a flexible "extras" bag for sparse per-token data
+such as logprobs or layer-wise activations.
+
+## TokenOrSeqRef shape
+
+``` python
+from inif import TokenOrSeqRef
+
+vocab_token = TokenOrSeqRef(id=464, token="The")
+ref_token   = TokenOrSeqRef(id=None, token="seq_0")
+```
+
+- `token: str` — required. For vocab tokens, the decoded string. For
+  sequence refs, the target `Sequence.id` (a string).
+- `id: int | None` — optional. `int >= 0` marks a vocabulary token (the
+  model's vocab id). `None` marks a sequence reference. **The presence /
+  absence of `id` is the discriminator** — there is no separate
+  `sequence_id` field.
+
+The `is_sequence_ref` property is the cheap discriminator check
+(`return self.id is None`), and the read-only `sequence_id` property
+returns `self.token` for refs and `None` for vocab tokens — handy when you
+want to write `if tok.sequence_id == "seq_0"` without remembering the
+underlying invariant.
+
+::: {.callout-tip appearance="minimal"}
+#### Why one class
+
+INIF documents typically share large prefixes (system prompts, few-shot
+exemplars, MCQ scaffolding) across every sample. Stowing those once in
+`Sequence` and pointing at them from samples keeps file sizes manageable.
+A single class for both vocab tokens and refs avoids two parallel hierarchies
+and makes the JSON shape ergonomic: refs serialize as `{"token": "seq_0"}`
+in compact mode (`id` is `None` and stripped as a default). See
+[Sequences](sequences.qmd) for how the dedup pass produces these refs.
+:::
+
+## Sequence refs are pointers, not tokens
+
+A sequence ref *expands* to its constituent tokens. Two helpers do this:
+
+`TokenOrSeqRef.expanded_tokens(sequences)` — flatten one entry. Returns a
+single-element list for vocab tokens, otherwise the sequence's tokens.
+
+`Sample.get_expanded_tokens(sequences)` — flatten a whole sample, building
+the sequence map once instead of per-token. This is the right call when you
+want the flat view for analysis.
+
+For random-access editing of a single position inside a ref, use
+`Sample.materialize_position(expanded_pos, sequences)`. It expands *only*
+the containing ref in place, leaves the other refs alone, and returns
+`(actual_index, real_token)` so you can write to it. This is the primitive
+that lets you attach interpretability outputs to specific positions when
+those positions are currently compressed inside a shared sequence.
+
+## Text segments
+
+`Sample.texts` is a list of `Text` objects (not raw strings). Each `Text`
+records a named source segment plus the token range that segment renders
+into:
+
+``` python
+from inif import Text
+
+Text(name="user_0", value="What is 2+2?",   start=12, end=18)
+Text(name="assistant_0", value="The answer is 4.", start=18, end=27,
+     metadata={"turn_idx": 0})
+```
+
+- `name: str` — a per-segment label.
+- `value: str` — the segment content.
+- `start: int | None`, `end: int | None` — half-open token offsets covering
+  the tokens that render this text in the chat-template output. For chat
+  messages this captures the content plus any chat-template delimiters
+  assigned to that message; for plain text it covers the whole token
+  stream. Both are `None` when the converter cannot map the text to a
+  token range (e.g. a lossy decode round-trip — best-effort).
+- `children: list[Text]` — optional sub-segments. Used for assistant
+  turns whose body splits into reasoning / content / tool-calls (each
+  becomes one child `Text` with its own value and range). When children
+  are present the parent's own `value` is typically empty and the renderer
+  iterates the children. Each child's range must sit inside the parent's
+  range.
+- `metadata: dict` — free-form caller-supplied context (e.g. turn index,
+  tool-call payload — the tool-call children carry `{"id", "type", "function"}`
+  here).
+
+The default naming scheme is **role-based** for chat inputs (`"system_0"`,
+`"user_0"`, `"assistant_0"`, `"user_1"`, …, system prompt always included)
+and **index-based** for plain-text inputs (`"text_0"`, `"text_1"`, …). The
+[converters](../converters/index.qmd) emit `Text` objects with these
+defaults; the `name_messages` helper in `inif.converters._tokenize` is the
+shared implementation.
+
+### Children for assistant sub-sections
+
+Assistant turns that issued a tool call or carried a separate reasoning
+trace usually have an empty top-level `value` — the actual payload sits on
+sibling fields the chat template knows how to render. The eval converters
+lift those into `Text.children` so the viewer can show them as labelled
+boxes:
+
+``` python
+Text(
+    name="assistant_3",
+    value="",
+    start=820, end=910,
+    children=[
+        Text(name="reasoning",  value="...", start=820, end=860),
+        Text(name="content",    value="...", start=860, end=895),
+        Text(name="tool_calls", value="",    start=895, end=910,
+             children=[Text(name="search", value='{"q": "..."}',
+                            metadata={"id": "...", "type": "function"})]),
+    ],
+)
+```
+
+Per-child token offsets are filled in by detecting where each structured
+field renders inside the chat template (render-with-vs-without diff for
+`reasoning` and `tool_calls`; the `content` child takes the leftover
+range). When the diff isn't conclusive, children may be present without
+offsets — they still describe the sub-section, just without a token
+attribution.
+
+## Extras
+
+INIF tokens accept arbitrary extra fields via Pydantic's `extra="allow"`.
+The same data lives in two places — `__dict__` (so attribute access works)
+and `model_extra` (so serialization works) — so always use the helpers
+below, which keep both in sync:
+
+``` python
+from inif import TokenOrSeqRef
+
+tok = TokenOrSeqRef(id=10, token="Hello")
+tok.set_extra("logprob", -0.3)        # write
+tok.get_extra("logprob")              # read, returns -0.3
+tok.has_extra("logprob")              # True
+tok.pop_extra("logprob")              # remove and return
+tok.extras                            # snapshot dict of all extras
+```
+
+::: {.callout-warning appearance="minimal"}
+#### Don't bypass the helpers
+
+Setting `tok.logprob = 0.1` puts the value in `__dict__` only — it won't
+serialize. Setting `tok.model_extra["logprob"] = 0.1` puts it in the
+serialization bag only — attribute access reads stale data. The helpers
+are the only safe interface.
+:::
+
+## Conventional extra names
+
+The schema documents these names under `$defs.TokenExtras` (in
+[`inif.schema`](../reference/inif.schema.qmd)) so external validators and
+viewers know what to expect:
+
+| Name | Type | Meaning |
+|---|---|---|
+| `logprob` | `float` | Per-token log-probability from the model. Auto-attached by the Inspect converter when the eval log includes choice logprobs. |
+| `logit_lens` | `dict` | Per-layer logit-lens output keyed by layer name. Set by interpretability tooling. |
+
+You can store anything else under any name — probes, attention weights,
+gradient norms — these are just the conventionally-named fields the viewer
+recognises out of the box.
+
+## Why extras block deduplication
+
+[Sequence deduplication](sequences.qmd) skips any token that has extras
+attached. The reason is that extras are *position-specific* (the logprob at
+position 17 is not the same as at position 42 even if the token string is
+identical), so collapsing two such positions into a single shared `Sequence`
+would silently destroy information. The dedup pass therefore treats any
+extras-carrying token as a barrier.
+
+The same is true for tokens covered by an [annotation](annotations.qmd).
+
+## Serialization gotchas
+
+- Field declaration order is `token` first, then `id`, so rendered dicts
+  read naturally as `{"token": "...", "id": N}` for vocab tokens and
+  `{"token": "seq_0"}` for sequence refs (with compact mode the default
+  `id is None` is stripped).
+- The custom JSON pretty-printer used by `InifDocument.save` renders
+  extras-free token dicts on a single line; tokens with extras render
+  multi-line like any other dict.

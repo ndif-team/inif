@@ -1,0 +1,213 @@
+---
+title: Saving and Loading
+description: How to save and load INIF documents — the .inif.json plain format and the .inif indexed archive — and the unified read API that works on both.
+llms-description: Use InifDocument.save / .load with .inif.json or .inif (auto-dispatch by suffix); use iter_samples / read_samples / read_info for format-agnostic reads (random access, header reads, streaming).
+---
+
+INIF supports two on-disk formats. Both produce the *same* `InifDocument`
+when loaded — pick based on size and access pattern, not on what you can
+read back.
+
+| Format | Suffix | Use when |
+|---|---|---|
+| Plain JSON | `.inif.json` (`.json`) | Default. Diff-friendly, opens in any editor, easy to inspect. |
+| Indexed archive | `.inif` | Large documents (≥ many MB). Random-access by sample id, header-only reads, streaming writes. |
+
+The single entry points for both are `InifDocument.save(path)` and the
+`InifDocument.load(path)` classmethod, which dispatch based on the file
+suffix.
+
+## Plain JSON
+
+``` python
+from inif import InifDocument
+
+doc.save("traces.inif.json")
+doc = InifDocument.load("traces.inif.json")
+```
+
+By default `save` produces a *compact* dump: `None` values and
+default-valued fields are stripped. Sequence-ref tokens (`id is None`)
+serialize down to a single-key `{"token": "<seq_id>"}` dict. Pass
+`compact=False` to keep every field:
+
+``` python
+doc.save("traces.inif.json", compact=False)   # full dump
+```
+
+### Pretty-printing
+
+`save` ships with a custom JSON pretty-printer tuned for INIF:
+
+- `indent=4` (default) — pretty-printed. Token dicts *without* extras
+  render on a single line for readability; tokens *with* extras render
+  multi-line like any other dict.
+- `indent=None` (or `0`) — single-line `json.dumps` output. Smallest plain
+  JSON, but harder to read.
+
+``` python
+doc.save("compact.inif.json", indent=None)   # one big line
+```
+
+## Indexed archive
+
+The `.inif` indexed archive is a single zip file with a fixed internal
+layout:
+
+``` text
+manifest.json          — sample ids + per-sample summaries (uncompressed)
+metadata.json          — Metadata (uncompressed)
+sequences.json         — Sequence list (compressed)
+samples/00000000.json  — one sample per file (compressed)
+samples/00000001.json
+...
+_journal/              — incremental-write journal (see below)
+```
+
+Readers can open the archive, parse the small manifest, and either:
+
+- Inflate the entire document.
+- Read just the metadata + per-sample summaries (header-only).
+- Read one or more samples by id without touching the rest.
+- Stream samples in manifest order.
+
+### Save and load
+
+``` python
+doc.save("traces.inif")                  # writes the indexed archive
+doc = InifDocument.load("traces.inif")   # full load
+```
+
+`save` and `load` dispatch based on suffix — passing `"traces.inif"` calls
+the indexed-archive writer/reader internally. `save_indexed` and
+`load_indexed` are the lower-level entry points exposed by `inif.indexed`
+for advanced options like `compression=`, `max_preview_chars=`, or
+partial loads via `sample_ids=`.
+
+## Unified read API
+
+Three top-level functions in `inif.io` work on **both** `.inif` and
+`.inif.json` files — call them with whichever format your data happens to
+be in, and the dispatcher does the rest. For `.inif`, they hit the indexed
+archive (random access, header-only reads). For `.inif.json`, they fall
+back to a full load and operate over the in-memory document.
+
+### Header-only reads with `read_info`
+
+When you only need to know what a file contains — model id, eval source,
+sample summaries — you don't have to inflate the samples:
+
+``` python
+from inif import read_info
+
+info = read_info("traces.inif")             # works on .inif and .inif.json
+print(info.metadata.model.name)
+for s in info.samples:
+    print(s["id"], s["n_tokens"], s["scores"])
+```
+
+`read_info` returns a `DocumentInfo`: `metadata` plus a list of summary
+dicts. Each summary carries `id`, `n_tokens`, `n_texts`, `n_spans`, score
+values, a truncated `text_preview`, plus optional `target` / `error` /
+`input_tokens` / `output_tokens` when present. **Sequences are not
+included** — that is the whole point of the cheap header read.
+
+### Random access with `read_samples`
+
+``` python
+from inif import read_samples
+
+one  = read_samples("traces.inif", "sample_42")            # single id
+many = read_samples("traces.inif.json", ["sample_1", "sample_7"])
+```
+
+A bare string / int id is wrapped in a list automatically; the return type
+is always a `list[Sample]` in the order requested. Duplicate ids in the
+request list are rejected; missing ids raise `KeyError`.
+
+### Streaming with `iter_samples`
+
+For a memory-bounded scan over every sample:
+
+``` python
+from inif import iter_samples
+
+for sample in iter_samples("traces.inif"):
+    process(sample)
+```
+
+For `.inif`, the archive stays open for the duration of the iterator and
+samples are inflated lazily. For `.inif.json`, the full document is parsed
+once and its samples are then yielded — same iteration shape, the
+trade-off is just where the parsing happens.
+
+### Partial loads via `load_indexed`
+
+When you need a self-contained `InifDocument` (with its sequence list
+pruned to what's referenced) for only a subset of samples, reach for
+`inif.indexed.load_indexed`:
+
+``` python
+from inif.indexed import load_indexed
+
+doc = load_indexed("traces.inif", sample_ids=["sample_1", "sample_7"])
+```
+
+`load_indexed` is `.inif`-only — `.inif.json` doesn't have a header to
+inspect separately, so use `read_samples` followed by your own
+sub-document construction (`InifDocument(metadata=..., samples=...,
+sequences=...)`) if you really need that on JSON.
+
+### Incremental writes
+
+For pipelines that produce samples one at a time, write directly to the
+archive instead of buffering the whole document in memory:
+
+``` python
+from inif import IndexedInifWriter
+
+with IndexedInifWriter("streaming.inif", doc.metadata, doc.sequences) as writer:
+    for sample in produce_samples():
+        writer.write_sample(sample)
+        writer.flush()   # makes the archive readable so far
+```
+
+`writer.flush()` closes and reopens the underlying zip handle. This is the
+mechanism that makes a partially-written archive readable from another
+process without losing the writer's append position.
+
+The writer also maintains a `_journal/` directory inside the archive — one
+manifest entry per sample written — so a reader that crashes mid-write can
+still recover the samples that made it to disk. On `close()`, the final
+manifest is written and the journal is no longer needed.
+
+## Dict round-trips
+
+`to_dict` / `from_dict` are the in-memory equivalents of `save` / `load`,
+useful when you want to ship an INIF document across a process boundary
+(IPC, an RPC payload) without writing to disk:
+
+``` python
+data = doc.to_dict()                  # JSON-ready dict
+doc  = InifDocument.from_dict(data)   # the inverse
+```
+
+`to_dict` honours the same `compact=True` default — `None` values and
+default-valued fields are stripped.
+
+## Schema validation
+
+If you want to validate a JSON document against the INIF schema before
+loading it (for example, files coming from an external producer):
+
+``` python
+import json
+from inif import validate
+
+with open("external.inif.json") as f:
+    validate(json.load(f))   # raises ValidationError on bad data
+```
+
+`validate` runs the same Pydantic validators as `load` but throws away the
+parsed object. To get the JSON Schema as a dict, call `get_schema()`; to
+write it to disk for a downstream consumer, `write_schema(path)`.

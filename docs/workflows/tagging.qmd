@@ -1,0 +1,240 @@
+---
+title: Tagging Tokens
+description: Adding annotations to tokens via regex, predicate, text-level matching, or chat-template roles.
+llms-description: Sample.tag_by_regex / .tag_by_text_regex / .tag_by_predicate / .tag_chat_roles produce TokenAnnotation entries; InifDocument has the same methods for whole-document fan-out; sample.create_span_from_tag converts a tag into a Span.
+---
+
+INIF's tagging API is a small set of methods on `Sample` (single sample)
+and `InifDocument` (whole-document fan-out). The two surfaces share names
+so the receiver disambiguates the scope — `sample.tag_by_regex(...)` runs
+on one sample; `doc.tag_by_regex(...)` runs the same matching across every
+sample in the document.
+
+All taggers add [`TokenAnnotation`](../concepts/annotations.qmd) entries
+unless otherwise noted; per-name auto-merge applies, so calling the same
+method twice with the same name extends the existing record rather than
+creating a duplicate.
+
+## Regex over token strings
+
+Tag every token whose decoded string matches a regex.
+
+``` python
+sample.tag_by_regex(r"^\d+$", "number")           # one sample
+doc.tag_by_regex(r"^\d+$", "number")              # all samples in a doc
+```
+
+For multiple patterns in a single token pass — much faster than calling the
+single-pattern method N times:
+
+``` python
+doc.tag_by_regexes([
+    (r"^\d+$",        "number"),
+    (r"^[A-Z]+$",     "uppercase"),
+    (r"\.$",          "sentence_end"),
+])
+```
+
+### Sequence refs
+
+Token-string regex tagging is sequence-ref aware: the `Sample` methods
+accept a `sequences=` argument, and the `InifDocument` methods forward
+`doc.sequences` automatically. When a sample has refs, the tagger inspects
+the *expanded* view; if a match falls inside a ref, only that one ref is
+materialized in place — other refs in the sample, and refs in other samples
+that don't have a match, are left untouched.
+
+``` python
+sample.tag_by_regex(r"\bParis\b", "city", sequences=doc.sequences)
+```
+
+The `Sequence` itself is never modified — the materialization replaces the
+ref token in `sample.tokens` with copies of the sequence's tokens, leaving
+`doc.sequences` intact. Other samples that pointed at the same sequence
+keep pointing at it.
+
+## Regex over concatenated text
+
+Token-string regex only sees one token at a time, so it can't match
+patterns that span token boundaries (e.g. `"Eiffel"` split by BPE into
+`[" E", "iff", "el"]`). For those, use `tag_by_text_regex`, which joins
+all token strings, runs the regex on the joined text, then maps character
+spans back to token indices.
+
+``` python
+from inif import TextTagMode
+
+sample.tag_by_text_regex(r"Paris", "city")                       # default: ALL
+sample.tag_by_text_regex(r"\d+\.\d+", "decimal", mode=TextTagMode.FIRST)
+doc.tag_by_text_regex(r"\d{4}", "year")
+```
+
+`mode` controls which tokens of a multi-token match get tagged:
+
+| Mode | Behaviour |
+|---|---|
+| `ALL` (default) | Tag every token overlapping the match. |
+| `FIRST` | Tag only the first token of each match. |
+| `LAST` | Tag only the last token of each match. |
+
+You can also pass the bare strings `"all"` / `"first"` / `"last"` instead
+of importing `TextTagMode`.
+
+::: {.callout-note appearance="minimal"}
+#### Sequence refs are not expanded here
+
+`tag_by_text_regex` operates directly on `sample.tokens`. To match inside
+refs, call `Sample.materialize_position` for the position you care about,
+or run `doc.expand_sequences()` and tag on the expanded view. This matches
+the trade-off the function makes for performance — the character-offset
+map is rebuilt per call and would have to walk every ref otherwise.
+:::
+
+## Predicate-based tagging
+
+When you need full Python expressivity:
+
+``` python
+sample.tag_by_predicate(lambda t: t.id is not None and t.id > 50_000, "rare")
+
+doc.tag_by_predicates([
+    (lambda t: t.id is not None and t.id > 50_000,                "rare"),
+    (lambda t: t.token is not None and t.token.startswith(" "),   "leading_space"),
+])
+```
+
+Predicates receive the `TokenOrSeqRef` object (not just the string), so you
+can filter by id, presence of extras, etc. Sequence-ref handling matches
+the regex methods.
+
+## Chat roles
+
+`tag_chat_roles` annotates each token with the role of its enclosing chat
+message — `system`, `user`, `assistant`, `tool` — using character-span
+matching against `tokenizer.apply_chat_template`. Delimiters and
+template-generated content get tagged `template`. The `Sample` form takes
+one `messages` list; the `InifDocument` form takes a list-of-lists, one
+per sample, in the same order as `doc.samples`.
+
+``` python
+messages_per_sample = [
+    [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}],
+    ...
+]
+doc.tag_chat_roles(messages_per_sample, tokenizer)
+```
+
+::: {.callout-warning appearance="minimal"}
+#### Run after dedup
+
+`tag_chat_roles` writes annotations to the *current* `sample.tokens`. Run
+sequence deduplication first if you want to (so the annotations don't
+prevent collapse), then tag — that order is what the converters use by
+default.
+
+Some tokenizers (notably Qwen's, which replaces U+2028 with U+FFFD) are
+lossy and won't round-trip from per-token decode back to the formatted
+template string. Role tagging is a no-op for those samples rather than
+raising.
+
+Some chat templates (Qwen3-family) `|trim` per-message content (system /
+user / tool messages with leading or trailing whitespace), so the raw
+inspect-supplied text won't match in the rendered template. The role
+tagger retries the match with `text.strip()` before giving up, so those
+messages still get their role attribution instead of falling through to
+`template`.
+:::
+
+For a single sample, call
+
+``` python
+sample.tag_chat_roles(messages, tokenizer, sequences=doc.sequences or None)
+```
+
+`sequences` is needed when the document has been deduplicated so the tagger
+can expand refs whose expanded positions straddle a role boundary.
+
+## Generated-output tagging
+
+The Inspect AI and evaleval converters add a `generated` annotation
+(`metadata={"source": "converter"}`) covering the last assistant
+message — the model's actual response. You normally don't need to call this
+yourself; it's controlled via `tag_generated=True` (the default) on the
+converter entry points. See [`from_eval_log`](../converters/inspect_ai.qmd)
+and [`from_instance_records`](../converters/evaleval.qmd) for the option.
+
+## Reasoning and tool-call tagging
+
+`tag_reasoning=True` on the eval converters runs the shared
+`tag_template_field_renderings` helper, which detects each per-message
+structured field (`reasoning`, `tool_calls`) by rendering the chat
+template twice — once with the field, once without — and using the diff
+to locate the chars the template emitted *for* that field. Tokens in the
+diff window get the field's annotation (`reasoning` / `tool_call`) AND
+the message's role (`assistant`), moved out of `template` if
+`tag_chat_roles` had labelled them there.
+
+This is fully model-agnostic: the chat template itself decides where each
+field renders. You don't normally call the helper directly; flip
+`tag_reasoning=True` (the default) on the converter entry points.
+
+## Special tokens
+
+Tag every special token (BOS, EOS, etc.) discovered via the tokenizer's
+`all_special_ids`:
+
+``` python
+sample.tag_special_tokens(tokenizer)               # tag = "special"
+sample.tag_special_tokens(tokenizer, "delimiter")  # custom name
+```
+
+## Position tagging
+
+If you already know the positions, skip the matching helpers and use the
+annotation primitives directly:
+
+``` python
+sample.annotate_positions("manual", [3, 5, 7])
+sample.annotate("manual", [(3, 8)])                # half-open range form
+```
+
+`annotate` and `annotate_positions` are the underlying primitives all the
+tag methods build on; both auto-coalesce overlapping ranges and merge into
+the (single) annotation entry under that name.
+
+## Removing tags
+
+``` python
+sample.remove_annotation("manual")        # one sample
+doc.remove_annotation("manual")           # whole document
+```
+
+Both remove the annotation under that name (annotations are unique per
+name within a sample, so there's only one to remove).
+
+## Spans from tags
+
+To convert an annotation into a [Span](../concepts/annotations.qmd#span)
+(for tooling that consumes spans):
+
+``` python
+span = sample.create_span_from_tag("city", "answer_span")
+```
+
+The created span carries the original tag in its `tags` list and the
+flattened position list across every range carrying that name.
+
+## Pattern compilation
+
+Precompile patterns when you re-use them many times:
+
+``` python
+import re
+
+NUMBER  = re.compile(r"^\d+$")
+INITIAL = re.compile(r"^[A-Z]\.")
+
+doc.tag_by_regexes([(NUMBER, "number"), (INITIAL, "initial")])
+```
+
+Pre-compiled `re.Pattern` and bare strings can be mixed freely.

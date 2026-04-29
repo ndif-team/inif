@@ -1,0 +1,73 @@
+---
+title: Installation
+description: How to install INIF and its optional converter extras.
+llms-description: Install INIF from PyPI; pick optional extras for Inspect AI or every_eval_ever support.
+---
+
+## Requirements
+
+- Python 3.10 or newer.
+- [`pydantic`](https://docs.pydantic.dev) (>= 2.0) and
+  [`transformers`](https://huggingface.co/docs/transformers) — installed
+  automatically.
+
+## From PyPI
+
+Install the core package:
+
+``` bash
+pip install inif
+```
+
+The core install is enough to read and write `.inif.json` / `.inif` files,
+build documents from raw text via [`from_texts`](../converters/text.qmd), tag
+and select tokens, render the HTML viewer, and run the CLI.
+
+## Optional extras
+
+The converter for evaluation frameworks lives behind extras so the framework
+itself doesn't become a hard dependency.
+
+### Inspect AI
+
+For [Inspect AI](https://inspect.aisi.org.uk/) eval log conversion:
+
+``` bash
+pip install "inif[inspect]"
+```
+
+This pulls `inspect-ai`, which is required to call
+[`from_eval_log`](../converters/inspect_ai.qmd) /
+[`from_eval_file`](../converters/inspect_ai.qmd) on `.eval` files.
+
+### every_eval_ever (EEE)
+
+For streaming records from the
+[`evaleval/EEE_datastore`](https://huggingface.co/datasets/evaleval/EEE_datastore)
+HuggingFace dataset:
+
+``` bash
+pip install "inif[evaleval]"
+```
+
+This pulls `datasets`. Local JSON / JSONL conversion via
+[`from_eval_json`](../converters/evaleval.qmd) does not need this extra.
+
+## From source
+
+``` bash
+git clone https://github.com/ndif-team/inif
+cd inif
+make dev      # or: uv sync --all-extras
+```
+
+`make dev` installs the package in editable mode together with the dev tools
+(`pytest`, `ruff`, `ty`) and Quarto-based docs dependencies.
+
+## Verify the install
+
+``` bash
+inif --help
+```
+
+If the CLI prints its subcommands (`view`, `convert`), the install is good.

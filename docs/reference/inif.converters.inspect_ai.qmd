@@ -1,0 +1,16 @@
+---
+title: inif.converters.inspect_ai
+description: Convert Inspect AI EvalLog objects and .eval files into INIF documents.
+reference: inif.converters.inspect_ai
+---
+
+Requires the `inspect` extra (`pip install "inif[inspect]"`). See
+[the Inspect AI converter guide](../converters/inspect_ai.qmd) for what
+gets preserved (per-token logprobs, generated annotations, scores,
+generation config, eval / run ids) and how the tokenizer is resolved.
+
+## Entry points
+
+### from_eval_log
+
+### from_eval_file

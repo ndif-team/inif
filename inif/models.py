@@ -76,6 +76,14 @@ class Text(BaseModel):
 
 
 class ModelInfo(BaseModel):
+    """Identifying info for the model whose tokens populate this document.
+
+    ``name`` is the only required field. ``revision`` and ``huggingface_id``
+    aid reproducibility; ``generation_config`` and ``loading_config`` are
+    free-form bags of inference / loading parameters as recorded by the
+    upstream framework.
+    """
+
     name: str
     revision: str | None = None
     huggingface_id: str | None = None
@@ -84,6 +92,12 @@ class ModelInfo(BaseModel):
 
 
 class SourceEval(BaseModel):
+    """Provenance metadata for a document built from an evaluation framework.
+
+    Set by the Inspect AI / evaleval converters, absent for ad-hoc text
+    inputs.
+    """
+
     framework: str
     framework_version: str | None = None
     task: str | None = None
@@ -94,6 +108,13 @@ class SourceEval(BaseModel):
 
 
 class Metadata(BaseModel):
+    """Document-level metadata: model, source eval, packages, timestamps.
+
+    Required on every :class:`InifDocument`. ``created_at`` is a real
+    ``datetime`` in memory; pydantic auto-parses ISO strings on load and
+    re-emits ISO on save.
+    """
+
     model: ModelInfo
     inif_version: str = "0.1"
     packages: dict = Field(default_factory=dict)
@@ -217,6 +238,14 @@ class TokenOrSeqRef(BaseModel):
 
 
 class Sequence(BaseModel):
+    """A token run shared across every sample in a document.
+
+    Both the token strings and their vocabulary ids are stored, so a
+    ``deduplicate_sequences`` → ``expand_sequences`` round-trip preserves
+    the exact ids. ``n_tokens`` must equal ``len(tokens)`` (enforced by a
+    validator).
+    """
+
     id: str
     n_tokens: int
     tokens: list[TokenOrSeqRef]
@@ -232,6 +261,14 @@ class Sequence(BaseModel):
 
 
 class Span(BaseModel):
+    """An ad-hoc named position list on a sample.
+
+    Unlike :class:`TokenAnnotation`, spans never auto-merge — adding a
+    second span with the same ``name`` produces two ``Span`` objects on
+    the sample. Use spans for free-form bookmarks and answer locations
+    where the named-range model doesn't fit.
+    """
+
     name: str
     positions: list[int] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
@@ -239,6 +276,15 @@ class Span(BaseModel):
 
 
 class TokenAnnotation(BaseModel):
+    """A named region on a sample expressed as half-open token ranges.
+
+    ``ranges`` are ``[start, end)``; ``start < end`` is enforced. Use the
+    sample-level helpers (:meth:`Sample.annotate`,
+    :meth:`Sample.annotate_positions`) to add annotations — they merge
+    adjacent / overlapping ranges with identical metadata into a single
+    record.
+    """
+
     name: str
     ranges: list[tuple[int, int]] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
@@ -253,6 +299,13 @@ class TokenAnnotation(BaseModel):
 
 
 class SampleScore(BaseModel):
+    """One scorer's evaluation result for a sample.
+
+    ``value`` is whatever the scorer reports — bool for pass/fail, float
+    for graded scorers, dict / list for structured outputs. ``answer`` is
+    the extracted answer string (when applicable).
+    """
+
     scorer: str
     value: str | int | float | bool | list | dict
     answer: str | None = None
@@ -261,6 +314,19 @@ class SampleScore(BaseModel):
 
 
 class Sample(BaseModel):
+    """One self-contained tokenized generation trace.
+
+    The required field is ``id``; everything else defaults to an empty list
+    or ``None``. The first-class fields ``target``, ``references``,
+    ``choices``, ``interaction_type``, ``error``, and ``sample_hash`` are
+    aligned with the every_eval_ever schema so filters and viewers can rely
+    on them without reaching into ``metadata``.
+
+    Construction validates that every ``span.positions`` index and every
+    ``annotation.ranges`` window lies within ``len(tokens)``; out-of-range
+    values raise ``ValidationError``.
+    """
+
     id: str
     tokens: list[TokenOrSeqRef] = Field(default_factory=list)
     texts: list[Text] = Field(default_factory=list)
@@ -634,6 +700,14 @@ class TokenExtras(BaseModel):
 
 
 class InifDocument(BaseModel):
+    """The top-level container — metadata, deduplicated sequences, samples.
+
+    ``total_samples`` is a computed property (``len(samples)``); there is
+    no stored field for it. Use :meth:`subset` to derive a self-contained
+    sub-document with sequences pruned to those referenced by the kept
+    samples.
+    """
+
     metadata: Metadata
     sequences: list[Sequence] = Field(default_factory=list)
     samples: list[Sample] = Field(default_factory=list)

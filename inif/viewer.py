@@ -1613,11 +1613,12 @@ def _render_messages_panel(
 
 
 def _render_texts_panel(sample_data: dict) -> str:
-    """Legacy fallback: a flat list of ``{name, value}`` entries.
+    """Flat ``{name, value}`` fallback rendering.
 
-    Only used when the document predates the message-panel layout (no
-    ``start`` / ``end`` on any text); current converters always populate
-    those, so this is purely for backwards compatibility with old archives.
+    Used when none of the texts on this sample carry ``start`` / ``end``
+    offsets (e.g. when the converter could not map the text to a token
+    range), so the per-message panel layout cannot drive an eye-toggle
+    over the token strip.
     """
     texts = sample_data.get("texts", [])
     if not texts:
@@ -1692,8 +1693,8 @@ def _render_sample_panel(
     if messages_html:
         parts.append(messages_html)
     else:
-        # Old archives without per-text offsets: fall back to a single
-        # full-document token strip plus the legacy "Texts" panel.
+        # No per-text offsets on this sample — fall back to a single
+        # full-document token strip plus the flat ``Texts`` panel.
         parts.append(
             _render_token_strip(sample_data, sequences, extra_colors, newline_chars)
         )

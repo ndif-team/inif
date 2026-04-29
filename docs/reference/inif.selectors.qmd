@@ -1,0 +1,19 @@
+---
+title: inif.selectors
+description: TokenSelection container; selection methods live on Sample / InifDocument.
+reference: inif.selectors
+---
+
+The selection container `TokenSelection` is exported from this module.
+The actual selection verbs are methods on
+[`Sample`](inif.models.qmd) (`.select_by_position`, `.select_by_annotation`,
+`.select_by_sequence_id`, `.select_by_span`) and on
+[`InifDocument`](inif.models.qmd) (`.filter_samples`, `.filter_samples_by_score`,
+`.subset`).
+
+See [Selecting tokens and samples](../concepts/selection.qmd) for the
+narrative overview.
+
+## Selection container
+
+### TokenSelection

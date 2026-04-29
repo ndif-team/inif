@@ -1,0 +1,74 @@
+---
+title: inif.models
+description: Core Pydantic models — InifDocument, Sample, TokenOrSeqRef, Sequence, Text, and friends.
+reference: inif.models
+---
+
+The classes here define the on-disk shape of an INIF document. They are
+re-exported from the top-level `inif` package, so most code does
+`from inif import Sample, TokenOrSeqRef, ...` rather than reaching into this
+module directly.
+
+The public verbs live on `InifDocument` and `Sample` as methods:
+
+- **IO and dict round-trips** — `InifDocument.save`, `InifDocument.load`
+  (classmethod), `InifDocument.to_dict`, `InifDocument.from_dict`
+  (classmethod).
+- **Sub-document construction** — `InifDocument.subset`,
+  `InifDocument.filter_samples`, `InifDocument.filter_samples_by_score`,
+  `InifDocument.get_sample`.
+- **Sequence (de)duplication** —
+  `InifDocument.deduplicate_sequences(min_length=5)`,
+  `InifDocument.expand_sequences()`.
+- **Tagging** — `Sample.tag_by_regex`, `Sample.tag_by_regexes`,
+  `Sample.tag_by_text_regex`, `Sample.tag_by_predicate`,
+  `Sample.tag_by_predicates`, `Sample.tag_chat_roles`,
+  `Sample.tag_special_tokens`, `Sample.create_span_from_tag`,
+  `Sample.annotate`, `Sample.annotate_positions`,
+  `Sample.annotation_positions`, `Sample.remove_annotation`. The same
+  tag methods are also available on `InifDocument` for whole-document
+  fan-out.
+- **Selection** — `Sample.select_by_position`,
+  `Sample.select_by_annotation`, `Sample.select_by_sequence_id`,
+  `Sample.select_by_span`.
+- **Sequence handling** — `Sample.materialize_position`,
+  `Sample.get_expanded_tokens`, `Sample.get_tokens_by_positions`,
+  `TokenOrSeqRef.expanded_tokens`.
+- **Token extras** — `TokenOrSeqRef.set_extra`, `.get_extra`,
+  `.has_extra`, `.pop_extra`, `.extras`.
+- **Viewer** — `InifDocument.render_html`, `InifDocument.save_html`,
+  `InifDocument.show`.
+
+## Documents
+
+### InifDocument
+
+## Samples
+
+### Sample
+
+### SampleScore
+
+## Tokens and text
+
+### TokenOrSeqRef
+
+### Sequence
+
+### Text
+
+### TokenExtras
+
+## Annotations and spans
+
+### TokenAnnotation
+
+### Span
+
+## Metadata
+
+### Metadata
+
+### ModelInfo
+
+### SourceEval

@@ -1,0 +1,21 @@
+---
+title: Reference
+---
+
+### Python API
+
+| | |
+|---|---|
+| [inif.converters.evaleval](inif.converters.evaleval.qmd) | Convert every_eval_ever instance-level records into INIF documents. |
+| [inif.converters.inspect_ai](inif.converters.inspect_ai.qmd) | Convert Inspect AI EvalLog objects and .eval files into INIF documents. |
+| [inif.converters.text](inif.converters.text.qmd) | Build INIF documents from raw text strings or text files on disk. |
+| [inif.flat](inif.flat.qmd) | Flat parallel-array view of an InifDocument for high-throughput scans. |
+| [inif.indexed](inif.indexed.qmd) | Indexed archive format — incremental writes, lower-level save/load, partial sample selection. |
+| [inif.io](inif.io.qmd) | Path-based readers for INIF documents — unified across .inif and .inif.json. |
+| [inif.models](inif.models.qmd) | Core Pydantic models — InifDocument, Sample, TokenOrSeqRef, Sequence, Text, and friends. |
+| [inif.schema](inif.schema.qmd) | JSON Schema export and validation for INIF documents. |
+| [inif.selectors](inif.selectors.qmd) | TokenSelection container; selection methods live on Sample / InifDocument. |
+| [inif.sequences](inif.sequences.qmd) | Sequence (de)duplication implementations powering InifDocument.deduplicate_sequences and .expand_sequences. |
+| [inif.tagging](inif.tagging.qmd) | Type aliases and modes for the tagging methods on Sample / InifDocument. |
+| [inif.viewer](inif.viewer.qmd) | HTML viewer implementations powering InifDocument.render_html / .save_html / .show. |
+: {.borderless tbl-colwidths=[35,65]}
