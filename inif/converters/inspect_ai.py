@@ -38,24 +38,68 @@ def _get_package_versions() -> dict[str, str]:
     return packages
 
 
+_GENERATION_CONFIG_FIELDS: tuple[str, ...] = (
+    "max_tokens",
+    "temperature",
+    "top_p",
+    "top_k",
+    "stop_seqs",
+    "frequency_penalty",
+    "presence_penalty",
+    "seed",
+    "best_of",
+    "logit_bias",
+    "num_choices",
+    "logprobs",
+    "top_logprobs",
+    "prompt_logprobs",
+    "parallel_tool_calls",
+    "max_tool_output",
+    "cache_prompt",
+    "verbosity",
+    "effort",
+    "reasoning_effort",
+    "reasoning_tokens",
+    "reasoning_summary",
+    "reasoning_history",
+    "response_schema",
+    "extra_headers",
+    "extra_body",
+    "modalities",
+    "max_connections",
+    "max_retries",
+    "timeout",
+)
+
+
 def _extract_model_info(eval_log: Any, tokenizer: Any = None) -> ModelInfo:
     model_name = eval_log.eval.model
-    gen_config = {}
-    if eval_log.plan and eval_log.plan.config:
-        config = eval_log.plan.config
-        for attr in [
-            "max_tokens",
-            "temperature",
-            "top_p",
-            "top_k",
-            "stop_seqs",
-            "frequency_penalty",
-            "presence_penalty",
-            "seed",
-        ]:
+    gen_config: dict[str, Any] = {}
+
+    # Generation params live on plan.config and on eval.model_generate_config —
+    # different inspect releases populate one vs. the other depending on
+    # whether the values came in via ``GenerateConfig`` or via the model
+    # provider's defaults. Read from both, with eval.model_generate_config
+    # winning on conflicts since it reflects the resolved config the provider
+    # actually saw.
+    config_sources = [
+        getattr(eval_log.plan, "config", None) if eval_log.plan else None,
+        getattr(eval_log.eval, "model_generate_config", None),
+    ]
+    for config in config_sources:
+        if config is None:
+            continue
+        for attr in _GENERATION_CONFIG_FIELDS:
             val = getattr(config, attr, None)
             if val is not None:
                 gen_config[attr] = val
+
+    # Record that the converter rewrote Qwen3-style ``last_query_index``
+    # gating so historical reasoning blocks are preserved in the rendered
+    # tokens. Downstream consumers (e.g. interpretability conversions that
+    # need to replay what the model actually saw at turn N) must reapply
+    # the original gating themselves.
+    gen_config["preserve_reasoning"] = True
 
     revision = None
     if tokenizer is not None:
@@ -68,11 +112,61 @@ def _extract_model_info(eval_log: Any, tokenizer: Any = None) -> ModelInfo:
     )
 
 
+_EVAL_CONFIG_FIELDS: tuple[str, ...] = (
+    "limit",
+    "sample_id",
+    "epochs",
+    "epochs_reducer",
+    "fail_on_error",
+    "continue_on_fail",
+    "retry_on_error",
+    "message_limit",
+    "token_limit",
+    "time_limit",
+    "working_limit",
+    "cost_limit",
+    "max_samples",
+    "max_tasks",
+    "max_subprocesses",
+    "max_sandboxes",
+)
+
+
 def _extract_source_eval(eval_log: Any) -> SourceEval:
     eval_spec = eval_log.eval
     task_version = getattr(eval_spec, "task_version", None)
     if task_version is not None:
         task_version = str(task_version)
+
+    # Eval-time limits and run options that aren't generation params but ARE
+    # needed to reproduce / interpret the run (sample limits, per-sample
+    # message caps, time budgets, error-handling policy). Stash on
+    # ``SourceEval.extra`` so the canonical source-eval shape stays
+    # framework-agnostic while keeping the data accessible.
+    extra: dict[str, Any] = {}
+    eval_config = getattr(eval_spec, "config", None)
+    if eval_config is not None:
+        eval_extras: dict[str, Any] = {}
+        for attr in _EVAL_CONFIG_FIELDS:
+            val = getattr(eval_config, attr, None)
+            if val is not None:
+                eval_extras[attr] = val
+        if eval_extras:
+            extra["eval_config"] = eval_extras
+
+    task_args = getattr(eval_spec, "task_args", None) or {}
+    if task_args:
+        extra["task_args"] = dict(task_args)
+    solver = getattr(eval_spec, "solver", None)
+    if solver:
+        extra["solver"] = solver
+    solver_args = getattr(eval_spec, "solver_args", None)
+    if solver_args:
+        extra["solver_args"] = dict(solver_args)
+    model_args = getattr(eval_spec, "model_args", None) or {}
+    if model_args:
+        extra["model_args"] = dict(model_args)
+
     return SourceEval(
         framework="inspect_ai",
         framework_version=eval_spec.inspect_version
@@ -82,6 +176,7 @@ def _extract_source_eval(eval_log: Any) -> SourceEval:
         task_version=task_version,
         eval_id=eval_spec.eval_id if hasattr(eval_spec, "eval_id") else None,
         run_id=eval_spec.run_id if hasattr(eval_spec, "run_id") else None,
+        extra=extra,
     )
 
 

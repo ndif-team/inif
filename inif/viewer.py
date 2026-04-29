@@ -354,10 +354,14 @@ def _render_css() -> str:
     border: 1px solid #bbb;
     border-radius: 3px;
     cursor: pointer;
-    font-size: 0.9em;
-    padding: 2px 8px;
+    font-size: 0.8em;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 3px 10px;
     color: #555;
-    line-height: 1;
+    line-height: 1.2;
+    min-width: 64px;
+    text-align: center;
 }
 .inif-message-toggle:hover { background: #eee; }
 .inif-message-toggle.active { background: #555; color: #fff; border-color: #555; }
@@ -699,6 +703,7 @@ def _render_js() -> str:
         var showingTokens = btn.classList.toggle('active');
         if (text) text.hidden = showingTokens;
         if (toks) toks.hidden = !showingTokens;
+        btn.textContent = showingTokens ? 'text' : 'tokens';
         btn.setAttribute('title', showingTokens ? 'Show text' : 'Show tokens');
     });
 
@@ -1580,7 +1585,7 @@ def _render_messages_panel(
         parts.append(meta_html)
         parts.append(
             '<button class="inif-message-toggle" type="button" '
-            'title="Show tokens">▦</button>'
+            'title="Show tokens">tokens</button>'
         )
         parts.append("</div>")
         # Text body (default): reasoning / content / tool-calls sections.

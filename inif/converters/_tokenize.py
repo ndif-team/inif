@@ -8,6 +8,7 @@ dicts and a HuggingFace tokenizer.
 from __future__ import annotations
 
 import json
+import re
 import warnings
 from typing import Any, Callable
 
@@ -17,6 +18,26 @@ from inif.converters._decode import (
     offset_mapping_decode_text,
 )
 from inif.models import Sample, Sequence, Text, TokenOrSeqRef
+
+# Some chat templates gate reasoning rendering on
+# ``loop.index0 > ns.last_query_index``, so historical assistants get their
+# ``<think>...</think>`` block stripped from the rendered output. There is no
+# kwarg to override this. INIF wants every emitted reasoning trace preserved
+# (so analysis at any possible turn N can still see turn N-1's reasoning), so
+# we rewrite the gate to ``true`` before rendering. No-op for templates that
+# don't contain this pattern since the substitution finds nothing to replace.
+_REASONING_GATE_RE = re.compile(
+    r"(\{%-?\s*if\s+)loop\.index0\s*>\s*ns\.last_query_index(\s*-?%\})"
+)
+
+
+def _patch_template_preserve_reasoning(template: str | None) -> str | None:
+    """Rewrite ``last_query_index`` gating so historical
+    assistant reasoning renders alongside the latest one. Returns the
+    template unchanged when the pattern isn't present."""
+    if not template or "ns.last_query_index" not in template:
+        return template
+    return _REASONING_GATE_RE.sub(r"\1true\2", template)
 
 
 def render_chat_template(
@@ -33,13 +54,27 @@ def render_chat_template(
     care about for analysis. Passing ``preserve_thinking=True`` keeps the
     full reasoning trace; templates that don't recognize the kwarg silently
     ignore it.
+
+    Some templates instead hardcode reasoning rendering behind a
+    ``loop.index0 > ns.last_query_index`` gate that no kwarg can flip. For
+    those templates :func:`_patch_template_preserve_reasoning` rewrites the
+    gate to ``true`` before rendering so every assistant's reasoning makes
+    it into the formatted output. Downstream interpretability pipelines
+    that need to replay what the model actually saw at turn N must reapply
+    the original gating; the ``preserve_reasoning`` flag persisted under
+    ``Metadata.model.generation_config`` records that this transformation
+    was performed.
     """
+    chat_template = _patch_template_preserve_reasoning(
+        getattr(tokenizer, "chat_template", None)
+    )
     return tokenizer.apply_chat_template(
         messages,
         tokenize=tokenize,
         add_generation_prompt=False,
         return_dict=False,
         preserve_thinking=True,
+        chat_template=chat_template,
     )
 
 
@@ -238,6 +273,13 @@ def compute_message_token_ranges(
         # No terminator: anchor on content starts. ``search_from`` advances
         # monotonically so messages stay in order even when the same content
         # string appears more than once.
+        #
+        # Some templates ``|trim`` per-message content (system, user,
+        # tool), so a raw ``find`` misses content that originally carried
+        # leading or trailing whitespace. Retry the find with the trimmed
+        # form so parallel tool-call traces (which produce fewer terminators
+        # than messages and thus land here) still get their per-message
+        # boundaries.
         content_starts: list[int | None] = []
         search_from = 0
         for msg in messages:
@@ -248,9 +290,15 @@ def compute_message_token_ranges(
                 if not isinstance(text, str) or not text:
                     continue
                 idx = formatted.find(text, search_from)
+                match_len = len(text)
+                if idx < 0:
+                    stripped = text.strip()
+                    if stripped and stripped != text:
+                        idx = formatted.find(stripped, search_from)
+                        match_len = len(stripped)
                 if idx < 0:
                     continue
-                end = idx + len(text)
+                end = idx + match_len
                 if m_start is None or idx < m_start:
                     m_start = idx
                 if end > m_end:

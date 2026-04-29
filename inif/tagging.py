@@ -194,10 +194,19 @@ def _tag_chat_roles(
             if not text:
                 continue
             idx = concatenated.find(text, search_from)
+            match_len = len(text)
+            # Some chat templates ``|trim`` per-message content so
+            # the raw inspect-supplied text won't match. Retry
+            # with the trimmed form so the role still gets attributed.
+            if idx < 0:
+                stripped = text.strip()
+                if stripped and stripped != text:
+                    idx = concatenated.find(stripped, search_from)
+                    match_len = len(stripped)
             if idx < 0:
                 continue
-            content_spans.append((idx, idx + len(text), role))
-            search_from = idx + len(text)
+            content_spans.append((idx, idx + match_len, role))
+            search_from = idx + match_len
 
     roles: list[str] = []
     for i in range(len(expanded)):
