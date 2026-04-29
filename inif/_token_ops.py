@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-from inif.models import Sample, Sequence, Token
+from inif.models import Sample, Sequence, TokenOrSeqRef
 
 CompiledRegexTag = tuple[re.Pattern[str], str]
-PredicateTag = tuple[Callable[[Token], bool], str]
+PredicateTag = tuple[Callable[[TokenOrSeqRef], bool], str]
 
 
 def sample_has_sequence_refs(sample: Sample) -> bool:
@@ -28,14 +28,22 @@ def compile_regex_tags(
     ]
 
 
-def _regex_matches(token: Token, regex_tags: list[CompiledRegexTag]) -> list[str]:
+def _regex_matches(
+    token: TokenOrSeqRef, regex_tags: list[CompiledRegexTag]
+) -> list[str]:
+    # Sequence refs carry the target Sequence id in ``token.token``; matching a
+    # regex against that string would tag spurious positions, so skip refs.
+    if token.is_sequence_ref:
+        return []
     text = token.token
     if text is None:
         return []
     return [tag for pattern, tag in regex_tags if pattern.search(text)]
 
 
-def _predicate_matches(token: Token, predicate_tags: list[PredicateTag]) -> list[str]:
+def _predicate_matches(
+    token: TokenOrSeqRef, predicate_tags: list[PredicateTag]
+) -> list[str]:
     return [tag for predicate, tag in predicate_tags if predicate(token)]
 
 
@@ -65,7 +73,7 @@ def apply_regex_tags(
         return
 
     seq_map = {seq.id: seq for seq in sequences}
-    new_tokens: list[Token] = []
+    new_tokens: list[TokenOrSeqRef] = []
     old_to_new: list[tuple[int, int]] = []
     for token in sample.tokens:
         new_start = len(new_tokens)
@@ -77,9 +85,8 @@ def apply_regex_tags(
             old_to_new.append((new_start, len(new_tokens)))
             continue
 
-        assert token.sequence_id is not None, "Sequence ref token must have sequence_id"
-        assert token.sequence_id in seq_map, f"Sequence '{token.sequence_id}' not found"
-        seq = seq_map[token.sequence_id]
+        assert token.token in seq_map, f"Sequence '{token.token}' not found"
+        seq = seq_map[token.token]
         should_materialize = any(
             seq_token.token is not None
             and any(pattern.search(seq_token.token) for pattern, _ in regex_tags)
@@ -95,7 +102,7 @@ def apply_regex_tags(
 
         for seq_token in seq.tokens:
             pos = len(new_tokens)
-            real_token = Token(id=seq_token.id, token=seq_token.token)
+            real_token = TokenOrSeqRef(id=seq_token.id, token=seq_token.token)
             for tag in _regex_matches(real_token, regex_tags):
                 positions_by_tag[tag].append(pos)
             new_tokens.append(real_token)
@@ -125,7 +132,7 @@ def apply_predicate_tags(
         return
 
     seq_map = {seq.id: seq for seq in sequences}
-    new_tokens: list[Token] = []
+    new_tokens: list[TokenOrSeqRef] = []
     old_to_new: list[tuple[int, int]] = []
     for token in sample.tokens:
         new_start = len(new_tokens)
@@ -137,9 +144,8 @@ def apply_predicate_tags(
             old_to_new.append((new_start, len(new_tokens)))
             continue
 
-        assert token.sequence_id is not None, "Sequence ref token must have sequence_id"
-        assert token.sequence_id in seq_map, f"Sequence '{token.sequence_id}' not found"
-        seq = seq_map[token.sequence_id]
+        assert token.token in seq_map, f"Sequence '{token.token}' not found"
+        seq = seq_map[token.token]
         should_materialize = any(
             any(predicate(seq_token) for predicate, _ in predicate_tags)
             for seq_token in seq.tokens
@@ -154,7 +160,7 @@ def apply_predicate_tags(
 
         for seq_token in seq.tokens:
             pos = len(new_tokens)
-            real_token = Token(id=seq_token.id, token=seq_token.token)
+            real_token = TokenOrSeqRef(id=seq_token.id, token=seq_token.token)
             for tag in _predicate_matches(real_token, predicate_tags):
                 positions_by_tag[tag].append(pos)
             new_tokens.append(real_token)

@@ -13,6 +13,7 @@ from inif.converters._tokenize import (
     messages_to_tokens,
     offset_mapping_decode,
     resolve_tokenizer,
+    tag_template_field_renderings,
 )
 from inif.models import (
     InifDocument,
@@ -22,9 +23,9 @@ from inif.models import (
     SampleScore,
     Sequence,
     SourceEval,
-    Token,
+    Text,
+    TokenOrSeqRef,
 )
-from inif.sequences import deduplicate_sequences
 
 
 def _get_package_versions() -> dict[str, str]:
@@ -37,24 +38,68 @@ def _get_package_versions() -> dict[str, str]:
     return packages
 
 
+_GENERATION_CONFIG_FIELDS: tuple[str, ...] = (
+    "max_tokens",
+    "temperature",
+    "top_p",
+    "top_k",
+    "stop_seqs",
+    "frequency_penalty",
+    "presence_penalty",
+    "seed",
+    "best_of",
+    "logit_bias",
+    "num_choices",
+    "logprobs",
+    "top_logprobs",
+    "prompt_logprobs",
+    "parallel_tool_calls",
+    "max_tool_output",
+    "cache_prompt",
+    "verbosity",
+    "effort",
+    "reasoning_effort",
+    "reasoning_tokens",
+    "reasoning_summary",
+    "reasoning_history",
+    "response_schema",
+    "extra_headers",
+    "extra_body",
+    "modalities",
+    "max_connections",
+    "max_retries",
+    "timeout",
+)
+
+
 def _extract_model_info(eval_log: Any, tokenizer: Any = None) -> ModelInfo:
     model_name = eval_log.eval.model
-    gen_config = {}
-    if eval_log.plan and eval_log.plan.config:
-        config = eval_log.plan.config
-        for attr in [
-            "max_tokens",
-            "temperature",
-            "top_p",
-            "top_k",
-            "stop_seqs",
-            "frequency_penalty",
-            "presence_penalty",
-            "seed",
-        ]:
+    gen_config: dict[str, Any] = {}
+
+    # Generation params live on plan.config and on eval.model_generate_config —
+    # different inspect releases populate one vs. the other depending on
+    # whether the values came in via ``GenerateConfig`` or via the model
+    # provider's defaults. Read from both, with eval.model_generate_config
+    # winning on conflicts since it reflects the resolved config the provider
+    # actually saw.
+    config_sources = [
+        getattr(eval_log.plan, "config", None) if eval_log.plan else None,
+        getattr(eval_log.eval, "model_generate_config", None),
+    ]
+    for config in config_sources:
+        if config is None:
+            continue
+        for attr in _GENERATION_CONFIG_FIELDS:
             val = getattr(config, attr, None)
             if val is not None:
                 gen_config[attr] = val
+
+    # Record that the converter rewrote Qwen3-style ``last_query_index``
+    # gating so historical reasoning blocks are preserved in the rendered
+    # tokens. Downstream consumers (e.g. interpretability conversions that
+    # need to replay what the model actually saw at turn N) must reapply
+    # the original gating themselves.
+    gen_config["preserve_reasoning"] = True
 
     revision = None
     if tokenizer is not None:
@@ -67,11 +112,61 @@ def _extract_model_info(eval_log: Any, tokenizer: Any = None) -> ModelInfo:
     )
 
 
+_EVAL_CONFIG_FIELDS: tuple[str, ...] = (
+    "limit",
+    "sample_id",
+    "epochs",
+    "epochs_reducer",
+    "fail_on_error",
+    "continue_on_fail",
+    "retry_on_error",
+    "message_limit",
+    "token_limit",
+    "time_limit",
+    "working_limit",
+    "cost_limit",
+    "max_samples",
+    "max_tasks",
+    "max_subprocesses",
+    "max_sandboxes",
+)
+
+
 def _extract_source_eval(eval_log: Any) -> SourceEval:
     eval_spec = eval_log.eval
     task_version = getattr(eval_spec, "task_version", None)
     if task_version is not None:
         task_version = str(task_version)
+
+    # Eval-time limits and run options that aren't generation params but ARE
+    # needed to reproduce / interpret the run (sample limits, per-sample
+    # message caps, time budgets, error-handling policy). Stash on
+    # ``SourceEval.extra`` so the canonical source-eval shape stays
+    # framework-agnostic while keeping the data accessible.
+    extra: dict[str, Any] = {}
+    eval_config = getattr(eval_spec, "config", None)
+    if eval_config is not None:
+        eval_extras: dict[str, Any] = {}
+        for attr in _EVAL_CONFIG_FIELDS:
+            val = getattr(eval_config, attr, None)
+            if val is not None:
+                eval_extras[attr] = val
+        if eval_extras:
+            extra["eval_config"] = eval_extras
+
+    task_args = getattr(eval_spec, "task_args", None) or {}
+    if task_args:
+        extra["task_args"] = dict(task_args)
+    solver = getattr(eval_spec, "solver", None)
+    if solver:
+        extra["solver"] = solver
+    solver_args = getattr(eval_spec, "solver_args", None)
+    if solver_args:
+        extra["solver_args"] = dict(solver_args)
+    model_args = getattr(eval_spec, "model_args", None) or {}
+    if model_args:
+        extra["model_args"] = dict(model_args)
+
     return SourceEval(
         framework="inspect_ai",
         framework_version=eval_spec.inspect_version
@@ -81,25 +176,93 @@ def _extract_source_eval(eval_log: Any) -> SourceEval:
         task_version=task_version,
         eval_id=eval_spec.eval_id if hasattr(eval_spec, "eval_id") else None,
         run_id=eval_spec.run_id if hasattr(eval_spec, "run_id") else None,
+        extra=extra,
     )
 
 
-def _extract_message_dicts(messages: list[Any]) -> list[dict[str, str]]:
-    """Convert Inspect AI message objects to plain dicts."""
-    result = []
+def _extract_tool_calls(msg: Any) -> list[dict[str, Any]] | None:
+    """Convert Inspect ``ToolCall`` objects to the OpenAI/Kimi-compatible
+    dict shape that HF chat templates expect."""
+    raw = getattr(msg, "tool_calls", None)
+    if not raw:
+        return None
+    out: list[dict[str, Any]] = []
+    for tc in raw:
+        fn_name = getattr(tc, "function", None) or ""
+        fn_args = getattr(tc, "arguments", None)
+        if fn_args is None:
+            fn_args = {}
+        out.append(
+            {
+                "id": getattr(tc, "id", "") or "",
+                "type": getattr(tc, "type", "function") or "function",
+                "function": {"name": fn_name, "arguments": fn_args},
+            }
+        )
+    return out
+
+
+def _extract_message_dicts(
+    messages: list[Any],
+) -> tuple[list[dict[str, Any]], list[str | None]]:
+    """Convert Inspect AI message objects to ``(msg_dicts, reasoning_per_msg)``.
+
+    Reasoning is routed through the chat template's native ``reasoning_content``
+    slot (not concatenated into ``content``) so the template wraps it inside
+    its own reasoning delimiters (``<think>…</think>`` for Kimi/Qwen, etc.)
+    instead of dumping the prose as plain content text after an empty
+    template-emitted wrapper. ``tool_calls`` and ``tool_call_id`` are
+    propagated when present — Kimi's template, in particular, only routes
+    assistant messages with ``tool_calls`` into the suffix (where
+    ``reasoning_content`` is rendered); without this propagation, every
+    intermediate reasoning gets stripped to ``<think></think>``.
+
+    ``reasoning_per_msg[i]`` is the raw reasoning string for message ``i`` so
+    :func:`tag_reasoning_blocks` can locate the rendered reasoning span in
+    the formatted chat-template output.
+    """
+    msg_dicts: list[dict[str, Any]] = []
+    reasoning_per_msg: list[str | None] = []
     for msg in messages:
         if isinstance(msg.content, str):
             text = msg.content
+            reasoning: str | None = None
         elif isinstance(msg.content, list):
-            text_parts = []
+            text_parts: list[str] = []
+            reasoning_parts: list[str] = []
             for part in msg.content:
-                if hasattr(part, "text"):
+                if getattr(part, "type", None) == "reasoning":
+                    rt = getattr(part, "reasoning", None) or ""
+                    if rt:
+                        reasoning_parts.append(rt)
+                elif hasattr(part, "text"):
                     text_parts.append(part.text)
             text = "".join(text_parts)
+            reasoning = "".join(reasoning_parts) if reasoning_parts else None
         else:
             text = str(msg.content)
-        result.append({"role": msg.role, "content": text})
-    return result
+            reasoning = None
+
+        d: dict[str, Any] = {"role": msg.role, "content": text}
+        if reasoning is not None:
+            # Both spellings — different chat templates pick different ones
+            # (Kimi reads ``reasoning`` first then falls back to ``reasoning_content``;
+            # other templates use only ``reasoning_content``).
+            d["reasoning"] = reasoning
+            d["reasoning_content"] = reasoning
+        tcs = _extract_tool_calls(msg)
+        if tcs is not None:
+            d["tool_calls"] = tcs
+        tc_id = getattr(msg, "tool_call_id", None)
+        if tc_id:
+            d["tool_call_id"] = tc_id
+        tc_fn = getattr(msg, "function", None)
+        if tc_fn:
+            d["name"] = tc_fn
+
+        msg_dicts.append(d)
+        reasoning_per_msg.append(reasoning)
+    return msg_dicts, reasoning_per_msg
 
 
 # Back-compat aliases — existing test modules import these private names.
@@ -187,9 +350,10 @@ def from_eval_log(
     tokenizer: Any = "auto",
     include_messages: bool = True,
     deduplicate: bool = True,
-    min_sequence_length: int = 3,
+    min_sequence_length: int = 5,
     tag_chat_roles: bool = True,
     tag_generated: bool = True,
+    tag_reasoning: bool = True,
     extract_logprobs: bool = True,
 ) -> InifDocument:
     """Convert an Inspect AI EvalLog to an InifDocument.
@@ -222,6 +386,13 @@ def from_eval_log(
             ``Sample.annotations`` with ``metadata={"source": "message_role"}``.
         tag_generated: Whether to tag the model's response tokens with
             ``"generated"``. The response is the last assistant message.
+        tag_reasoning: Whether to annotate ``ContentReasoning`` blocks pulled
+            from each assistant message. Tokens overlapping any reasoning span
+            get ``reasoning`` + ``assistant``; tokens within the span whose
+            id appears in ``tokenizer.all_special_ids`` additionally get
+            ``template``. Best-effort: silently skipped on lossy tokenizers
+            or when the reasoning text can't be located in the rendered
+            chat template.
         extract_logprobs: Whether to attach per-token logprobs from the eval
             output to the response tokens (best-effort: requires the tokenizer
             and the eval-source tokenization to agree on token count).
@@ -264,7 +435,7 @@ def from_eval_log(
             None,
         )
         if probe_sample is not None:
-            first_msgs = _extract_message_dicts(probe_sample.messages)
+            first_msgs, _ = _extract_message_dicts(probe_sample.messages)
         if first_msgs and offset_mapping_decode(first_msgs, tokenizer) is not None:
             use_offset_mapping = True
         elif has_byte_level_decoder(tokenizer):
@@ -278,8 +449,8 @@ def from_eval_log(
                 sample_id_raw = i
             sample_id = str(sample_id_raw)
 
-            texts: list[str] = []
-            sample_tokens: list[Token] = []
+            texts: list[Text] = []
+            sample_tokens: list[TokenOrSeqRef] = []
             target = None
 
             if hasattr(inspect_sample, "target") and inspect_sample.target:
@@ -291,7 +462,7 @@ def from_eval_log(
 
             msg_dicts: list[dict[str, str]] = []
             if include_messages and hasattr(inspect_sample, "messages"):
-                msg_dicts = _extract_message_dicts(inspect_sample.messages)
+                msg_dicts, _reasoning = _extract_message_dicts(inspect_sample.messages)
                 texts, sample_tokens = messages_to_tokens(
                     msg_dicts,
                     tokenizer,
@@ -349,12 +520,17 @@ def from_eval_log(
     )
 
     if deduplicate:
-        doc = deduplicate_sequences(doc, min_length=min_sequence_length)
+        doc = doc.deduplicate_sequences(min_length=min_sequence_length)
 
     if tag_chat_roles:
-        from inif.tagging import tag_chat_roles_doc
+        doc.tag_chat_roles(all_msg_dicts, tokenizer)
 
-        tag_chat_roles_doc(doc, all_msg_dicts, tokenizer)
+    if tag_reasoning:
+        sequences = doc.sequences or None
+        for sample, msg_dicts in zip(doc.samples, all_msg_dicts):
+            tag_template_field_renderings(
+                sample, msg_dicts, tokenizer, sequences=sequences
+            )
 
     return doc
 

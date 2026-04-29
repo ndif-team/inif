@@ -11,7 +11,7 @@ from inif._token_ops import (
     apply_regex_tags,
     compile_regex_tags,
 )
-from inif.models import InifDocument, Sample, Sequence, Span, Token
+from inif.models import InifDocument, Sample, Sequence, Span, TokenOrSeqRef
 
 
 class TextTagMode(str, Enum):
@@ -22,75 +22,51 @@ class TextTagMode(str, Enum):
     LAST = "last"
 
 
-def tag_by_regex(
-    sample: Sample,
-    pattern: str,
-    tag: str,
-    sequences: list[Sequence] | None = None,
-) -> None:
-    """Tag every token whose string matches ``pattern``.
-
-    When ``sequences`` is provided, the search runs over the *expanded* view
-    of the sample so tokens currently compressed inside a sequence ref are
-    inspected too. Matches inside a ref cause the containing ref to be
-    materialized in this sample (per-token information attaches to real
-    Tokens; other refs and other samples are untouched).
-    """
-    tag_by_regexes(sample, [(pattern, tag)], sequences=sequences)
-
-
-def tag_by_regexes(
+def _tag_by_regexes(
     sample: Sample,
     regex_tags: list[tuple[str | re.Pattern[str], str]],
     sequences: list[Sequence] | None = None,
 ) -> None:
-    """Apply multiple regex taggers in one token pass.
+    """Implementation backing :meth:`Sample.tag_by_regexes`.
 
-    This is the preferred API for large documents when several regex-based
-    strategies are known up front. If ``sequences`` is provided, sequence refs
-    are materialized only when at least one expanded token actually matches.
+    Apply multiple regex taggers in one token pass. If ``sequences`` is
+    provided, sequence refs are materialized only when at least one expanded
+    token actually matches.
     """
     apply_regex_tags(sample, compile_regex_tags(regex_tags), sequences=sequences)
 
 
-def tag_by_regex_all(doc: InifDocument, pattern: str, tag: str) -> None:
-    tag_by_regexes_all(doc, [(pattern, tag)])
-
-
-def tag_by_regexes_all(
+def _tag_by_regexes_doc(
     doc: InifDocument,
     regex_tags: list[tuple[str | re.Pattern[str], str]],
 ) -> None:
-    """Apply multiple regex taggers across all samples in one pass per sample."""
+    """Implementation backing :meth:`InifDocument.tag_by_regexes`."""
     compiled = compile_regex_tags(regex_tags)
     for sample in doc.samples:
         apply_regex_tags(sample, compiled, doc.sequences or None)
 
 
-def tag_by_text_regex(
+def _tag_by_text_regex(
     sample: Sample,
     pattern: str,
     tag: str,
     mode: TextTagMode = TextTagMode.ALL,
 ) -> None:
-    """Tag tokens whose concatenated text matches a regex.
+    """Implementation backing :meth:`Sample.tag_by_text_regex`.
 
-    Joins all token strings, finds regex matches in the joined text,
-    then maps character spans back to token indices. This handles
-    BPE subword splits (e.g. "Eiffel" split into [" E", "iff", "el"]).
+    Joins all token strings, finds regex matches in the joined text, then maps
+    character spans back to token indices. Handles BPE subword splits (e.g.
+    ``"Eiffel"`` split into ``[" E", "iff", "el"]``).
 
     Operates directly on ``sample.tokens``; sequence refs are not expanded
-    here. To match inside refs, call ``sample.materialize_position`` first
+    here. To match inside refs, call :meth:`Sample.materialize_position` first
     or apply this on a fully expanded view.
 
-    Args:
-        sample: The sample to tag.
-        pattern: Regex pattern to match against the concatenated text.
-        tag: Tag name to add.
-        mode: Which tokens to tag per match:
-            ALL — tag all tokens overlapping the match (default)
-            FIRST — tag only the first token of each match
-            LAST — tag only the last token of each match
+    ``mode`` selects which tokens to tag per match:
+
+    - ``ALL`` — tag all tokens overlapping the match (default)
+    - ``FIRST`` — tag only the first token of each match
+    - ``LAST`` — tag only the last token of each match
     """
     mode = TextTagMode(mode)
     compiled = re.compile(pattern)
@@ -128,89 +104,66 @@ def tag_by_text_regex(
             sample.annotate_positions(tag, matching_indices)
 
 
-def tag_by_text_regex_all(
+def _tag_by_text_regex_doc(
     doc: InifDocument,
     pattern: str,
     tag: str,
     mode: TextTagMode = TextTagMode.ALL,
 ) -> None:
-    """Apply text-based regex tagging across all samples."""
+    """Implementation backing :meth:`InifDocument.tag_by_text_regex`."""
     for sample in doc.samples:
-        tag_by_text_regex(sample, pattern, tag, mode=mode)
+        _tag_by_text_regex(sample, pattern, tag, mode=mode)
 
 
-def tag_by_predicate(
-    sample: Sample, predicate: Callable[[Token], bool], tag: str
-) -> None:
-    tag_by_predicates(sample, [(predicate, tag)])
-
-
-def tag_by_predicates(
+def _tag_by_predicates(
     sample: Sample,
     predicate_tags: list[PredicateTag],
     sequences: list[Sequence] | None = None,
 ) -> None:
-    """Apply multiple Python predicate taggers in one token pass."""
+    """Implementation backing :meth:`Sample.tag_by_predicates`."""
     apply_predicate_tags(sample, predicate_tags, sequences=sequences)
 
 
-def tag_by_predicates_all(
+def _tag_by_predicates_doc(
     doc: InifDocument,
     predicate_tags: list[PredicateTag],
 ) -> None:
-    """Apply multiple Python predicate taggers across all samples."""
+    """Implementation backing :meth:`InifDocument.tag_by_predicates`."""
     for sample in doc.samples:
         apply_predicate_tags(sample, predicate_tags, doc.sequences or None)
 
 
-def tag_positions(sample: Sample, positions: list[int], tag: str) -> None:
-    sample.annotate_positions(tag, positions)
-
-
-def remove_tag(sample: Sample, tag: str) -> None:
-    sample.remove_annotation(tag)
-
-
-def remove_tag_all(doc: InifDocument, tag: str) -> None:
-    for sample in doc.samples:
-        remove_tag(sample, tag)
-
-
-def create_span_from_tag(sample: Sample, tag: str, span_name: str) -> Span:
+def _create_span_from_tag(sample: Sample, tag: str, span_name: str) -> Span:
+    """Implementation backing :meth:`Sample.create_span_from_tag`."""
     positions = sample.annotation_positions(tag)
     span = Span(name=span_name, positions=positions, tags=[tag])
     sample.spans.append(span)
     return span
 
 
-def tag_chat_roles(
+def _tag_chat_roles(
     sample: Sample,
     messages: list[dict[str, str]],
     tokenizer: Any,
     sequences: list[Sequence] | None = None,
 ) -> None:
-    """Tag tokens with their chat template role via character-span matching.
+    """Implementation backing :meth:`Sample.tag_chat_roles`.
 
+    Tags tokens with their chat-template role via character-span matching.
     Works with any HuggingFace chat template. Content tokens get the role of
     their enclosing message; everything else (delimiters, role names,
     auto-generated text) is tagged as ``"template"``.
 
     Operates on expanded token views but writes roles only to non-ref tokens
     in ``sample.tokens``. Must be called AFTER sequence deduplication.
-
-    Args:
-        sample: The sample to tag.
-        messages: List of message dicts with ``"role"`` and ``"content"`` keys.
-        tokenizer: A tokenizer with ``apply_chat_template`` support.
-        sequences: Sequences for expanding refs (from ``doc.sequences``).
     """
     expanded = (
         sample.get_expanded_tokens(sequences) if sequences else list(sample.tokens)
     )
 
-    formatted = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=False
-    )
+    from inif.converters._tokenize import render_chat_template
+
+    formatted = render_chat_template(tokenizer, messages)
     decoded = [t.token or "" for t in expanded]
 
     offsets: list[tuple[int, int]] = []
@@ -228,16 +181,32 @@ def tag_chat_roles(
     if concatenated != formatted:
         return
 
+    # For each message, locate (in order) its reasoning_content text and its
+    # content text in the formatted output. Both belong to the message's role
+    # — reasoning is content the model emitted, just rendered inside the chat
+    # template's reasoning slot rather than the main content slot.
     content_spans: list[tuple[int, int, str]] = []
     search_from = 0
     for msg in messages:
-        content = msg.get("content", "")
-        if not content:
-            continue
-        idx = concatenated.find(content, search_from)
-        if idx >= 0:
-            content_spans.append((idx, idx + len(content), msg["role"]))
-            search_from = idx + len(content)
+        role = msg["role"]
+        for field in ("reasoning_content", "reasoning", "content"):
+            text = msg.get(field) or ""
+            if not text:
+                continue
+            idx = concatenated.find(text, search_from)
+            match_len = len(text)
+            # Some chat templates ``|trim`` per-message content so
+            # the raw inspect-supplied text won't match. Retry
+            # with the trimmed form so the role still gets attributed.
+            if idx < 0:
+                stripped = text.strip()
+                if stripped and stripped != text:
+                    idx = concatenated.find(stripped, search_from)
+                    match_len = len(stripped)
+            if idx < 0:
+                continue
+            content_spans.append((idx, idx + match_len, role))
+            search_from = idx + match_len
 
     roles: list[str] = []
     for i in range(len(expanded)):
@@ -249,16 +218,23 @@ def tag_chat_roles(
                 break
         roles.append(role)
 
-    exp_idx = 0
+    # Materialize sequence refs whose expanded positions span multiple roles
+    # — the alternative (skipping mixed-role refs) leaves them untagged AND
+    # blocks downstream taggers from assigning role-derived annotations.
+    from inif.converters._tokenize import _materialize_inconsistent_refs
+
+    role_per_exp = dict(enumerate(roles))
+    _materialize_inconsistent_refs(sample, sequences, role_per_exp)
+
     seq_map = {s.id: s for s in sequences} if sequences else {}
     positions_by_role: dict[str, list[int]] = {}
+    exp_idx = 0
     for pos, tok in enumerate(sample.tokens):
         if tok.is_sequence_ref:
-            assert tok.sequence_id is not None
-            n = seq_map[tok.sequence_id].n_tokens
-            ref_roles = set(roles[exp_idx : exp_idx + n])
-            if len(ref_roles) == 1:
-                positions_by_role.setdefault(ref_roles.pop(), []).append(pos)
+            n = seq_map[tok.token].n_tokens
+            # All expanded positions in this ref now share a role (post-
+            # materialization), so the first one represents the whole ref.
+            positions_by_role.setdefault(roles[exp_idx], []).append(pos)
             exp_idx += n
         else:
             positions_by_role.setdefault(roles[exp_idx], []).append(pos)
@@ -267,26 +243,21 @@ def tag_chat_roles(
         sample.annotate_positions(role, positions, metadata={"source": "message_role"})
 
 
-def tag_chat_roles_doc(
+def _tag_chat_roles_doc(
     doc: InifDocument,
     messages_per_sample: list[list[dict[str, str]]],
     tokenizer: Any,
 ) -> None:
-    """Tag chat roles for all samples in a document.
-
-    Args:
-        doc: The document whose samples to tag.
-        messages_per_sample: One message list per sample, same order as ``doc.samples``.
-        tokenizer: A tokenizer with ``apply_chat_template`` support.
-    """
+    """Implementation backing :meth:`InifDocument.tag_chat_roles`."""
     assert len(messages_per_sample) == len(doc.samples), (
         f"Expected {len(doc.samples)} message lists, got {len(messages_per_sample)}"
     )
     for sample, messages in zip(doc.samples, messages_per_sample):
-        tag_chat_roles(sample, messages, tokenizer, doc.sequences or None)
+        _tag_chat_roles(sample, messages, tokenizer, doc.sequences or None)
 
 
-def tag_special_tokens(sample: Sample, tokenizer, tag: str = "special") -> None:
+def _tag_special_tokens(sample: Sample, tokenizer, tag: str = "special") -> None:
+    """Implementation backing :meth:`Sample.tag_special_tokens`."""
     special_ids = set()
     if hasattr(tokenizer, "all_special_ids"):
         special_ids = set(tokenizer.all_special_ids)
@@ -295,3 +266,13 @@ def tag_special_tokens(sample: Sample, tokenizer, tag: str = "special") -> None:
         if not token.is_sequence_ref and token.id in special_ids:
             positions.append(i)
     sample.annotate_positions(tag, positions)
+
+
+# Type re-export — callers can import :class:`PredicateTag` from ``inif.tagging``
+# without dipping into the private ``_token_ops`` module.
+PredicateTag = PredicateTag
+
+# Tagging callables that accept either a ``str`` regex or an already-compiled
+# pattern. Re-exported here for callers building up batched tagger lists.
+RegexTag = tuple[str | re.Pattern[str], str]
+TokenPredicate = Callable[[TokenOrSeqRef], bool]

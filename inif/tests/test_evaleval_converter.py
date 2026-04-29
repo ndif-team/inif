@@ -21,9 +21,7 @@ from inif.converters.evaleval import (
     from_eval_json,
     from_instance_records,
 )
-from inif.io import to_dict
 from inif.schema import validate
-from inif.selectors import select_by_annotation
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -117,7 +115,13 @@ def _chat_tokenizer():
             parts = ["<s>"]
             for msg in messages:
                 parts.append(f"[{msg['role']}]")
-                parts.append(msg["content"])
+                rc = msg.get("reasoning_content") or msg.get("reasoning") or ""
+                if rc:
+                    # Mimic Kimi/Qwen-style native reasoning wrapping so the
+                    # reasoning span shows up inside <think>…</think> in the
+                    # rendered output.
+                    parts.append(f"<think>{rc}</think>")
+                parts.append(msg.get("content", ""))
                 parts.append(f"[/{msg['role']}]")
             formatted = "".join(parts)
             if not tokenize:
@@ -184,10 +188,15 @@ def test_messages_from_record_single_turn_with_reasoning():
         reasoning_trace=["Let me think... ", "2+2=4. "],
         output_raw=("The answer is 4.",),
     )
-    msgs = _messages_from_record(record)
+    msgs, reasoning = _messages_from_record(record)
     assert [m["role"] for m in msgs] == ["user", "assistant"]
     assert msgs[0]["content"] == "What is 2+2?"
-    assert msgs[1]["content"] == "Let me think... 2+2=4. The answer is 4."
+    # Content holds only the assistant's text response — reasoning is routed
+    # through the chat template's native reasoning slot.
+    assert msgs[1]["content"] == "The answer is 4."
+    assert msgs[1]["reasoning"] == "Let me think... 2+2=4. "
+    assert msgs[1]["reasoning_content"] == "Let me think... 2+2=4. "
+    assert reasoning == [None, "Let me think... 2+2=4. "]
 
 
 def test_messages_from_record_multi_turn_orders_by_turn_idx():
@@ -200,9 +209,10 @@ def test_messages_from_record_multi_turn_orders_by_turn_idx():
             {"turn_idx": 2, "role": "user", "content": "Bye."},
         ],
     )
-    msgs = _messages_from_record(record)
+    msgs, reasoning = _messages_from_record(record)
     assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
     assert [m["content"] for m in msgs] == ["Hello.", "Hi there.", "Bye."]
+    assert reasoning == [None, None, None]
 
 
 def test_messages_from_record_agentic_serializes_tool_calls():
@@ -222,7 +232,7 @@ def test_messages_from_record_agentic_serializes_tool_calls():
             {"turn_idx": 2, "role": "tool", "content": "sunny"},
         ],
     )
-    msgs = _messages_from_record(record)
+    msgs, _reasoning = _messages_from_record(record)
     assert msgs[1]["role"] == "assistant"
     assert "<tool_call name=search " in msgs[1]["content"]
     assert '"q": "weather"' in msgs[1]["content"]
@@ -244,7 +254,10 @@ def test_from_instance_records_single_turn():
     assert s.target == "4"
     assert s.references == ["4"]
     assert s.interaction_type == "single_turn"
-    assert s.texts == ["What is 2+2?", "The answer is 4."]
+    assert [(t.name, t.value) for t in s.texts] == [
+        ("user_0", "What is 2+2?"),
+        ("assistant_0", "The answer is 4."),
+    ]
     # Tokens are a load-bearing INIF invariant — always populated.
     assert len(s.tokens) > 0
     assert len(s.scores) == 1
@@ -434,10 +447,13 @@ def test_reasoning_tag_applied_via_char_span():
         tag_reasoning=True,
     )
     sample = doc.samples[0]
-    reasoning_tokens = select_by_annotation(sample, "reasoning").tokens
+    reasoning_tokens = sample.select_by_annotation("reasoning").tokens
     tagged_text = "".join(t.token or "" for t in reasoning_tokens)
-    # The reasoning trace should be covered entirely by reasoning-annotated tokens.
-    assert tagged_text == "I think step by step."
+    # The fake tokenizer wraps reasoning conditionally (no wrapper when
+    # reasoning is empty), so the diff captures the full `<think>…</think>`
+    # block — that's the correct general behaviour: the diff is whatever the
+    # template emits BECAUSE of the field.
+    assert tagged_text == "<think>I think step by step.</think>"
     # Tokens outside the reasoning span stay unannotated.
     reasoning_positions = set(sample.annotation_positions("reasoning"))
     post_reasoning = "".join(
@@ -478,9 +494,9 @@ def test_reasoning_tag_applied_per_multi_turn_message():
         tag_chat_roles=False,
     )
     sample = doc.samples[0]
-    reasoning_tokens = select_by_annotation(sample, "reasoning").tokens
+    reasoning_tokens = sample.select_by_annotation("reasoning").tokens
     tagged_text = "".join(t.token or "" for t in reasoning_tokens)
-    assert tagged_text == "think one. think two. "
+    assert tagged_text == "<think>think one. </think><think>think two. </think>"
     reasoning_positions = set(sample.annotation_positions("reasoning"))
     untagged_text = "".join(
         t.token or ""
@@ -580,7 +596,7 @@ def test_from_eval_json_roundtrip(tmp_path: Path):
     assert str(inst_path) in doc.metadata.sources
     # Round-trip through the top-level INIF schema validator to confirm the
     # produced document (including the new Tier 1 fields) is well-formed.
-    validate(to_dict(doc))
+    validate(doc.to_dict())
 
 
 def test_build_helpers_are_pure_dict_operations():

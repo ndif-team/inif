@@ -1,15 +1,11 @@
 from inif.flat import FlatTokenStore
-from inif.indexed import (
-    IndexedInifWriter,
-    iter_indexed_samples,
-    load_indexed,
-    read_indexed_header,
-    read_indexed_sample,
-    read_indexed_sample_summaries,
-    read_indexed_samples,
-    save_indexed,
+from inif.indexed import IndexedInifWriter
+from inif.io import (
+    DocumentInfo,
+    iter_samples,
+    read_info,
+    read_samples,
 )
-from inif.io import from_dict, load, save, to_dict
 from inif.models import (
     InifDocument,
     Metadata,
@@ -19,40 +15,14 @@ from inif.models import (
     Sequence,
     SourceEval,
     Span,
-    Token,
+    Text,
     TokenAnnotation,
     TokenExtras,
+    TokenOrSeqRef,
 )
 from inif.schema import get_schema, validate, write_schema
-from inif.selectors import (
-    TokenSelection,
-    filter_samples_by_score,
-    select_by_annotation,
-    select_by_position,
-    select_by_sequence_id,
-    select_by_span,
-)
-from inif.sequences import deduplicate_sequences, expand_sequences
-from inif.tagging import (
-    TextTagMode,
-    create_span_from_tag,
-    remove_tag,
-    remove_tag_all,
-    tag_by_predicate,
-    tag_by_predicates,
-    tag_by_predicates_all,
-    tag_by_regex,
-    tag_by_regex_all,
-    tag_by_regexes,
-    tag_by_regexes_all,
-    tag_by_text_regex,
-    tag_by_text_regex_all,
-    tag_chat_roles,
-    tag_chat_roles_doc,
-    tag_positions,
-    tag_special_tokens,
-)
-from inif.viewer import render_html, save_html, show
+from inif.selectors import TokenSelection
+from inif.tagging import PredicateTag, RegexTag, TextTagMode, TokenPredicate
 
 __all__ = [
     # Models
@@ -64,57 +34,25 @@ __all__ = [
     "Sequence",
     "SourceEval",
     "Span",
-    "Token",
+    "Text",
     "TokenAnnotation",
     "TokenExtras",
+    "TokenOrSeqRef",
     "FlatTokenStore",
-    # IO
-    "from_dict",
+    # IO (path-based readers; load/save/from_dict/to_dict live on InifDocument)
+    "DocumentInfo",
     "IndexedInifWriter",
-    "iter_indexed_samples",
-    "load",
-    "load_indexed",
-    "read_indexed_header",
-    "read_indexed_sample",
-    "read_indexed_sample_summaries",
-    "read_indexed_samples",
-    "save",
-    "save_indexed",
-    "to_dict",
+    "iter_samples",
+    "read_info",
+    "read_samples",
     # Schema
     "get_schema",
     "validate",
     "write_schema",
-    # Selectors
-    "TokenSelection",
-    "filter_samples_by_score",
-    "select_by_annotation",
-    "select_by_position",
-    "select_by_sequence_id",
-    "select_by_span",
-    # Tagging
+    # Selection / tagging types (operations are methods on Sample / InifDocument)
+    "PredicateTag",
+    "RegexTag",
     "TextTagMode",
-    "create_span_from_tag",
-    "remove_tag",
-    "remove_tag_all",
-    "tag_by_predicate",
-    "tag_by_predicates",
-    "tag_by_predicates_all",
-    "tag_by_regex",
-    "tag_by_regex_all",
-    "tag_by_regexes",
-    "tag_by_regexes_all",
-    "tag_by_text_regex",
-    "tag_by_text_regex_all",
-    "tag_chat_roles",
-    "tag_chat_roles_doc",
-    "tag_positions",
-    "tag_special_tokens",
-    # Sequences
-    "deduplicate_sequences",
-    "expand_sequences",
-    # Viewer
-    "render_html",
-    "save_html",
-    "show",
+    "TokenPredicate",
+    "TokenSelection",
 ]

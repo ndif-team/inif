@@ -87,7 +87,20 @@ def offset_mapping_decode_text(
     expected_ids: list[int],
     tokenizer: Any,
 ) -> list[str] | None:
-    """Decode token strings by slicing ``text`` with tokenizer offsets."""
+    """Decode token strings by slicing ``text`` with tokenizer offsets.
+
+    Multi-byte UTF-8 characters that get split across byte-level BPE tokens
+    (e.g. ``♠`` U+2660 → 3 bytes → 2 tokens on Qwen3.5) report the SAME
+    ``(start, end)`` offset on every fragment, since char-level slicing can't
+    represent partial chars. The naive ``text[start:end]`` would emit the
+    char once per fragment, so the joined per-token strings would be longer
+    than ``text``. We track ``last_consumed`` and only emit the chars that
+    haven't already been claimed by an earlier token; subsequent fragments of
+    the same char yield ``""``. The final ``"".join(pieces) == text`` check
+    is the load-bearing invariant — it catches any remaining mismatch (gaps,
+    tokenizer normalization that removes/adds chars) and signals the caller
+    to fall back to byte-slice decode.
+    """
     try:
         enc = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
     except (TypeError, KeyError, ValueError):
@@ -99,7 +112,19 @@ def offset_mapping_decode_text(
     offsets = enc["offset_mapping"]
     if list(ids) != list(expected_ids):
         return None
-    return [text[start:end] for start, end in offsets]
+
+    pieces: list[str] = []
+    last_consumed = 0
+    for start, end in offsets:
+        actual_start = max(start, last_consumed)
+        if actual_start < end:
+            pieces.append(text[actual_start:end])
+            last_consumed = end
+        else:
+            pieces.append("")
+    if "".join(pieces) != text:
+        return None
+    return pieces
 
 
 def decode_token_ids(

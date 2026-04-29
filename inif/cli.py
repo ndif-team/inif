@@ -7,7 +7,6 @@ from pathlib import Path
 
 def _convert_txt(args: argparse.Namespace) -> None:
     from inif.converters.text import from_text_files
-    from inif.io import save
 
     # Resolve input paths
     input_paths: list[str | Path] = []
@@ -37,7 +36,7 @@ def _convert_txt(args: argparse.Namespace) -> None:
         output = Path(args.output)
     else:
         output = Path(input_paths[0]).with_suffix(".inif.json")
-    save(doc, output)
+    doc.save(output)
     print(f"Saved to {output}")
 
 
@@ -45,20 +44,19 @@ def _view(args: argparse.Namespace) -> None:
     import tempfile
     import webbrowser
 
-    from inif.io import load
-    from inif.viewer import save_html
+    from inif.models import InifDocument
 
-    doc = load(args.input)
+    doc = InifDocument.load(args.input)
     if args.output:
-        save_html(
-            doc, args.output, compact=args.compact, title=args.title, source=args.input
+        doc.save_html(
+            args.output, compact=args.compact, title=args.title, source=args.input
         )
         print(f"Saved to {args.output}")
     else:
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w") as f:
             tmp_path = f.name
-        save_html(
-            doc, tmp_path, compact=args.compact, title=args.title, source=args.input
+        doc.save_html(
+            tmp_path, compact=args.compact, title=args.title, source=args.input
         )
         webbrowser.open(f"file://{tmp_path}")
         print(f"Opened {tmp_path} in browser")
@@ -66,7 +64,6 @@ def _view(args: argparse.Namespace) -> None:
 
 def _convert_eval(args: argparse.Namespace) -> None:
     from inif.converters.inspect_ai import from_eval_file
-    from inif.io import save
 
     for inp in args.inputs:
         kwargs = {
@@ -91,13 +88,12 @@ def _convert_eval(args: argparse.Namespace) -> None:
                 stem = stem[: -len(".eval")]
             output = p.parent / f"{stem}.inif.json"
 
-        save(doc, output)
+        doc.save(output)
         print(f"Saved to {output}")
 
 
 def _convert_evaleval(args: argparse.Namespace) -> None:
     from inif.converters.evaleval import from_eval_json, from_hf_dataset
-    from inif.io import save
 
     kwargs: dict = {
         "deduplicate": not args.no_dedup,
@@ -133,7 +129,7 @@ def _convert_evaleval(args: argparse.Namespace) -> None:
         doc.metadata.model.revision = args.revision
 
     output = Path(args.output) if args.output else Path(f"{default_stem}.inif.json")
-    save(doc, output)
+    doc.save(output)
     print(f"Saved to {output}")
 
 
@@ -168,7 +164,7 @@ def main(argv: list[str] | None = None) -> None:
     txt_parser.add_argument("-o", "--output", help="Output path")
     txt_parser.add_argument("-m", "--model", required=True, help="Tokenizer name")
     txt_parser.add_argument("--revision", help="Model revision")
-    txt_parser.add_argument("--min-seq-length", type=int, default=3, help="Min seq len")
+    txt_parser.add_argument("--min-seq-length", type=int, default=5, help="Min seq len")
     txt_parser.add_argument("--glob", help="Glob pattern for dir filtering")
     txt_parser.add_argument("--no-dedup", action="store_true", help="Skip dedup")
 
@@ -179,7 +175,7 @@ def main(argv: list[str] | None = None) -> None:
     eval_parser.add_argument("-m", "--model", help="Tokenizer model name")
     eval_parser.add_argument("--revision", help="Model revision")
     eval_parser.add_argument(
-        "--min-seq-length", type=int, default=3, help="Min seq len"
+        "--min-seq-length", type=int, default=5, help="Min seq len"
     )
     eval_parser.add_argument(
         "--no-tag-chat-roles",
@@ -221,7 +217,7 @@ def main(argv: list[str] | None = None) -> None:
     eee_parser.add_argument("-o", "--output", help="Output path")
     eee_parser.add_argument("-m", "--model", help="Tokenizer model name")
     eee_parser.add_argument("--revision", help="Model revision")
-    eee_parser.add_argument("--min-seq-length", type=int, default=3, help="Min seq len")
+    eee_parser.add_argument("--min-seq-length", type=int, default=5, help="Min seq len")
     eee_parser.add_argument(
         "--no-tag-chat-roles",
         action="store_true",

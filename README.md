@@ -23,14 +23,13 @@ pip install "inif[inspect]"
 ### From text
 
 ```python
-from inif import load, save
 from inif.converters.text import from_texts
 
 doc = from_texts(
     ["The capital of France is Paris.", "Hello world!"],
     tokenizer="gpt2",
 )
-save(doc, "traces.inif.json")
+doc.save("traces.inif.json")
 ```
 
 ### From Inspect AI eval logs
@@ -44,11 +43,11 @@ doc = from_eval_file("logs/my_eval.eval")
 ### Viewing
 
 ```python
-from inif import load, show, save_html
+from inif import InifDocument
 
-doc = load("traces.inif.json")
-show(doc)  # in Jupyter
-save_html(doc, "traces.html")  # self-contained HTML
+doc = InifDocument.load("traces.inif.json")
+doc.show()  # in Jupyter
+doc.save_html("traces.html")  # self-contained HTML
 ```
 
 ## CLI
@@ -75,40 +74,44 @@ InifDocument
 └── samples[]         — tokenized generation traces
     ├── tokens[]      — token id + string, plus sparse extras (logprob, logit lens, probes, ...)
     ├── annotations[] — named token ranges with optional metadata
-    ├── texts[]       — original message strings
+    ├── texts[]       — named text segments ({name, value, metadata})
     ├── spans[]       — named position ranges
     └── scores[]      — evaluation scores (scorer, value, answer)
 ```
 
-**Token ID convention**: `id >= 0` is a vocabulary token, `id == -N` references a shared `Sequence` via `sequence_id`.
+**Token convention**: each `TokenOrSeqRef` has `token: str` and an optional `id: int`. Vocabulary tokens use the integer `id`; sequence references have `id is None` and the `token` field carries the target `Sequence.id`.
 
 **Annotations**: repeated labels such as chat roles, generated output, reasoning traces, and regex matches live in `Sample.annotations` as named half-open ranges. This avoids repeating `"role": "assistant"` or `"tags": [...]` on every token in a long contiguous region.
+
+**Texts**: `Sample.texts` is a list of `Text` objects (`{name, value, metadata}`). Chat inputs are split per-message with role-based names (`"system_0"`, `"user_0"`, `"assistant_0"`, `"user_1"`, …, system prompt included); plain text inputs use index-based names (`"text_0"`, …).
 
 **Extensible tokens**: sparse per-token values such as logprobs and interpretability outputs (logit lens, probes, etc.) are stored as token extras.
 
 Use `.inif.json` for plain JSON and `.inif` for the indexed archive format. The
 archive keeps per-sample text previews in the manifest and stores each full
 sample payload as a separate compressed member, so callers can browse summaries
-without inflating token dictionaries:
+without inflating token dictionaries.
+
+The same unified read API works on both formats — pass a path with either
+suffix and the reader dispatches to the indexed-archive path or falls back to
+a full `load`:
 
 ```python
 from inif import (
     IndexedInifWriter,
-    iter_indexed_samples,
-    read_indexed_header,
-    read_indexed_sample,
-    read_indexed_samples,
-    read_indexed_sample_summaries,
-    save,
+    iter_samples,
+    read_info,
+    read_samples,
 )
 
-save(doc, "traces.inif")                     # indexed archive
-header = read_indexed_header("traces.inif")  # metadata + sequences only
-summaries = read_indexed_sample_summaries("traces.inif")
-sample = read_indexed_sample("traces.inif", "sample_42")
-subset = read_indexed_samples("traces.inif", ["sample_1", "sample_7"])
+doc.save("traces.inif")                      # indexed archive
+doc.save("traces.inif.json")                 # plain JSON
 
-for sample in iter_indexed_samples("traces.inif"):
+info = read_info("traces.inif")              # metadata + per-sample summaries
+sample = read_samples("traces.inif", "sample_42")[0]      # single id
+subset = read_samples("traces.inif", ["sample_1", "sample_7"])
+
+for sample in iter_samples("traces.inif.json"):           # works for both
     ...
 
 with IndexedInifWriter("streaming.inif", doc.metadata, doc.sequences) as writer:
@@ -117,36 +120,34 @@ with IndexedInifWriter("streaming.inif", doc.metadata, doc.sequences) as writer:
         writer.flush()  # make the partial archive readable
 ```
 
-The archive stores metadata and sequences once, then stores each sample as a
-separate compressed member with an uncompressed preview summary. This supports
-incremental writes, header-only reads, per-sample random access, and streaming
-iteration while preserving the same `InifDocument` model.
+The indexed archive stores metadata and sequences once, then stores each sample
+as a separate compressed member with an uncompressed preview summary. This
+supports incremental writes, header-only reads, per-sample random access, and
+streaming iteration while preserving the same `InifDocument` model.
 
 ## Key features
 
 ### Annotation
 
+All tagging is exposed as methods on `Sample` (single-sample) and `InifDocument` (whole-document fan-out). The two pairs share names so the receiver disambiguates the scope.
+
 ```python
-from inif import tag_by_regex_all, tag_by_text_regex, create_span_from_tag
+# Annotate every matching token across the whole document
+doc.tag_by_regex(r"^\d+$", "number")
 
-# Annotate tokens matching a regex pattern
-tag_by_regex_all(doc, r"^\d+$", "number")
+# Annotate by concatenated text (multi-token matches) on one sample
+sample.tag_by_text_regex(r"Paris", "city")
 
-# Annotate by concatenated text (multi-token matches)
-tag_by_text_regex(sample, r"Paris", "city")
-
-# Convert annotations to named spans
-create_span_from_tag(sample, "city", "answer_span")
+# Convert an annotation into a named span on a sample
+sample.create_span_from_tag("city", "answer_span")
 ```
 
 ### Selection
 
 ```python
-from inif import select_by_annotation, select_by_span, select_by_position
-
-selection = select_by_annotation(sample, "number")
-selection = select_by_span(sample, "answer_span")
-selection = select_by_position(sample, slice(5, 10))
+selection = sample.select_by_annotation("number")
+selection = sample.select_by_span("answer_span")
+selection = sample.select_by_position(slice(5, 10))
 ```
 
 ### Sequence deduplication
@@ -154,15 +155,13 @@ selection = select_by_position(sample, slice(5, 10))
 Common token sequences across samples (e.g. shared system prompts) are automatically deduplicated via set-intersection and stored as `Sequence` objects referenced by tokens.
 
 ```python
-from inif import deduplicate_sequences, expand_sequences
-
-deduplicate_sequences(doc, min_length=3)  # compress
-expand_sequences(doc)                     # flatten back
+deduped = doc.deduplicate_sequences()             # default min_length=5
+flat = deduped.expand_sequences()                 # flatten back
 ```
 
 ### Interactive HTML viewer
 
-`save_html` / `show` produce a self-contained HTML page with:
+`InifDocument.save_html` / `InifDocument.show` produce a self-contained HTML page with:
 
 - Collapsible sidebar with sample list and pass/fail indicators
 - Token-level display with hover tooltips showing all extra fields

@@ -1,74 +1,64 @@
-from inif.models import InifDocument, Metadata, ModelInfo, Sample, Sequence, Token
-from inif.selectors import select_by_annotation
-from inif.tagging import (
-    TextTagMode,
-    create_span_from_tag,
-    remove_tag,
-    tag_by_predicate,
-    tag_by_predicates,
-    tag_by_regex,
-    tag_by_regex_all,
-    tag_by_regexes,
-    tag_by_text_regex,
-    tag_chat_roles,
-    tag_chat_roles_doc,
-    tag_positions,
-    tag_special_tokens,
+from inif.models import (
+    InifDocument,
+    Metadata,
+    ModelInfo,
+    Sample,
+    Sequence,
+    TokenOrSeqRef,
 )
+from inif.tagging import TextTagMode
 
 
-def _annotated_tokens(sample: Sample, name: str) -> list[Token]:
-    return select_by_annotation(sample, name).tokens
+def _annotated_tokens(sample: Sample, name: str) -> list[TokenOrSeqRef]:
+    return sample.select_by_annotation(name).tokens
 
 
 def test_tag_by_regex(sample_flat):
-    tag_by_regex(sample_flat, r"^This$", "capitalized")
+    sample_flat.tag_by_regex(r"^This$", "capitalized")
     tagged = _annotated_tokens(sample_flat, "capitalized")
     assert len(tagged) == 1
     assert tagged[0].token == "This"
 
 
 def test_tag_by_regex_partial_match(sample_flat):
-    tag_by_regex(sample_flat, r"is", "has_is")
+    sample_flat.tag_by_regex(r"is", "has_is")
     tagged = _annotated_tokens(sample_flat, "has_is")
     # "This" and " is" both contain "is"
     assert len(tagged) == 2
 
 
 def test_tag_by_regex_no_match(sample_flat):
-    tag_by_regex(sample_flat, r"^zzz$", "no_match")
+    sample_flat.tag_by_regex(r"^zzz$", "no_match")
     tagged = _annotated_tokens(sample_flat, "no_match")
     assert len(tagged) == 0
 
 
-def test_tag_by_regex_all(doc):
-    from inif.models import InifDocument, Metadata, ModelInfo
-
+def test_tag_by_regex_doc(doc):
     doc2 = InifDocument(
         metadata=Metadata(model=ModelInfo(name="test")),
         samples=[
             Sample(
                 id="s0",
                 tokens=[
-                    Token(id=1, token="hello"),
-                    Token(id=2, token="world"),
+                    TokenOrSeqRef(id=1, token="hello"),
+                    TokenOrSeqRef(id=2, token="world"),
                 ],
             ),
             Sample(
                 id="s1",
                 tokens=[
-                    Token(id=1, token="hello"),
-                    Token(id=3, token="there"),
+                    TokenOrSeqRef(id=1, token="hello"),
+                    TokenOrSeqRef(id=3, token="there"),
                 ],
             ),
         ],
     )
-    tag_by_regex_all(doc2, r"hello", "greeting")
+    doc2.tag_by_regex(r"hello", "greeting")
     for s in doc2.samples:
         assert s.annotation_positions("greeting") == [0]
 
 
-def test_tag_by_regex_all_flat_sample_does_not_materialize(doc):
+def test_tag_by_regex_doc_flat_sample_does_not_materialize(doc):
     """A flat sample in a doc with sequences should stay on the direct path."""
     doc2 = InifDocument(
         metadata=Metadata(model=ModelInfo(name="test")),
@@ -77,24 +67,23 @@ def test_tag_by_regex_all_flat_sample_does_not_materialize(doc):
             Sample(
                 id="s0",
                 tokens=[
-                    Token(id=1, token="A"),
-                    Token(id=2, token="B"),
-                    Token(id=3, token="C"),
+                    TokenOrSeqRef(id=1, token="A"),
+                    TokenOrSeqRef(id=2, token="B"),
+                    TokenOrSeqRef(id=3, token="C"),
                 ],
             )
         ],
     )
     before_tokens = list(doc2.samples[0].tokens)
 
-    tag_by_regex_all(doc2, r"^[AB]$", "letter")
+    doc2.tag_by_regex(r"^[AB]$", "letter")
 
     assert doc2.samples[0].tokens == before_tokens
     assert doc2.samples[0].annotation_positions("letter") == [0, 1]
 
 
 def test_tag_by_regexes_applies_multiple_tags_one_pass(sample_flat):
-    tag_by_regexes(
-        sample_flat,
+    sample_flat.tag_by_regexes(
         [
             (r"^This$", "capitalized"),
             (r"is", "has_is"),
@@ -110,7 +99,7 @@ def test_tag_by_regex_materializes_inside_ref(sample, sequences):
     specific matching token, not the ref placeholder."""
     # sample.tokens[0] is a ref to seq_0 = ["<|endoftext|>", "This", " is"]
     n_before = len(sample.tokens)
-    tag_by_regex(sample, r"^This$", "capitalized", sequences=sequences)
+    sample.tag_by_regex(r"^This$", "capitalized", sequences=sequences)
 
     # The ref containing "This" was materialized into 3 tokens, so length grew by 2.
     assert len(sample.tokens) == n_before + 2
@@ -124,15 +113,14 @@ def test_tag_by_regex_materializes_inside_ref(sample, sequences):
 def test_tag_by_regex_no_materialization_when_no_match(sample, sequences):
     """If the regex doesn't match anything inside a ref, the ref stays compressed."""
     n_before = len(sample.tokens)
-    tag_by_regex(sample, r"^nope$", "x", sequences=sequences)
+    sample.tag_by_regex(r"^nope$", "x", sequences=sequences)
     assert len(sample.tokens) == n_before
     assert sample.tokens[0].is_sequence_ref
 
 
 def test_tag_by_regexes_materializes_matching_ref_once(sample, sequences):
     n_before = len(sample.tokens)
-    tag_by_regexes(
-        sample,
+    sample.tag_by_regexes(
         [
             (r"^This$", "capitalized"),
             (r"is", "has_is"),
@@ -149,15 +137,14 @@ def test_tag_by_regexes_materializes_matching_ref_once(sample, sequences):
 
 
 def test_tag_by_predicate(sample_flat):
-    tag_by_predicate(sample_flat, lambda t: t.id > 1000, "high_id")
+    sample_flat.tag_by_predicate(lambda t: t.id > 1000, "high_id")
     tagged = _annotated_tokens(sample_flat, "high_id")
     # Tokens with id 50256, 1212, 1332 have id > 1000
     assert len(tagged) == 3
 
 
 def test_tag_by_predicates_applies_multiple_tags(sample_flat):
-    tag_by_predicates(
-        sample_flat,
+    sample_flat.tag_by_predicates(
         [
             (lambda t: t.id > 1000, "high_id"),
             (lambda t: t.token is not None and t.token.strip() == "This", "word"),
@@ -169,8 +156,7 @@ def test_tag_by_predicates_applies_multiple_tags(sample_flat):
 
 
 def test_tag_by_predicates_can_materialize_sequence_ref(sample, sequences):
-    tag_by_predicates(
-        sample,
+    sample.tag_by_predicates(
         [(lambda t: t.token == "This", "capitalized")],
         sequences=sequences,
     )
@@ -181,8 +167,8 @@ def test_tag_by_predicates_can_materialize_sequence_ref(sample, sequences):
     assert matching[0].id == 1212
 
 
-def test_tag_positions(sample_flat):
-    tag_positions(sample_flat, [0, 5], "boundary")
+def test_annotate_positions_replaces_tag_positions(sample_flat):
+    sample_flat.annotate_positions("boundary", [0, 5])
     tagged = _annotated_tokens(sample_flat, "boundary")
     assert len(tagged) == 2
     # First and last token
@@ -190,22 +176,43 @@ def test_tag_positions(sample_flat):
     assert tagged[1].token == "."
 
 
-def test_tag_no_duplicates(sample_flat):
-    tag_positions(sample_flat, [0], "x")
-    tag_positions(sample_flat, [0], "x")
+def test_annotate_positions_no_duplicates(sample_flat):
+    sample_flat.annotate_positions("x", [0])
+    sample_flat.annotate_positions("x", [0])
     assert sample_flat.annotation_positions("x") == [0]
 
 
-def test_remove_tag(sample_flat):
-    tag_positions(sample_flat, [0, 1], "temp")
+def test_remove_annotation_clears_existing_tag(sample_flat):
+    sample_flat.annotate_positions("temp", [0, 1])
     assert sample_flat.annotation_positions("temp") == [0, 1]
-    remove_tag(sample_flat, "temp")
+    sample_flat.remove_annotation("temp")
     assert sample_flat.annotation_positions("temp") == []
 
 
+def test_remove_annotation_doc_clears_across_samples():
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="test")),
+        samples=[
+            Sample(
+                id="s0",
+                tokens=[TokenOrSeqRef(id=1, token="a")],
+                annotations=[{"name": "temp", "ranges": [(0, 1)]}],
+            ),
+            Sample(
+                id="s1",
+                tokens=[TokenOrSeqRef(id=2, token="b")],
+                annotations=[{"name": "temp", "ranges": [(0, 1)]}],
+            ),
+        ],
+    )
+    doc.remove_annotation("temp")
+    for s in doc.samples:
+        assert s.annotation_positions("temp") == []
+
+
 def test_create_span_from_tag(sample_flat):
-    tag_positions(sample_flat, [1, 2, 3], "phrase")
-    span = create_span_from_tag(sample_flat, "phrase", "my_phrase")
+    sample_flat.annotate_positions("phrase", [1, 2, 3])
+    span = sample_flat.create_span_from_tag("phrase", "my_phrase")
     assert span.name == "my_phrase"
     assert span.positions == [1, 2, 3]
     assert "phrase" in span.tags
@@ -217,13 +224,13 @@ def test_tag_by_text_regex_subword():
     sample = Sample(
         id="bpe",
         tokens=[
-            Token(id=1, token=" E"),
-            Token(id=2, token="iff"),
-            Token(id=3, token="el"),
-            Token(id=4, token=" Tower"),
+            TokenOrSeqRef(id=1, token=" E"),
+            TokenOrSeqRef(id=2, token="iff"),
+            TokenOrSeqRef(id=3, token="el"),
+            TokenOrSeqRef(id=4, token=" Tower"),
         ],
     )
-    tag_by_text_regex(sample, r"(?i)eiffel", "entity")
+    sample.tag_by_text_regex(r"(?i)eiffel", "entity")
     tagged = _annotated_tokens(sample, "entity")
     assert len(tagged) == 3
     assert [t.token for t in tagged] == [" E", "iff", "el"]
@@ -236,13 +243,13 @@ def test_tag_by_text_regex_first():
     sample = Sample(
         id="bpe",
         tokens=[
-            Token(id=1, token=" E"),
-            Token(id=2, token="iff"),
-            Token(id=3, token="el"),
-            Token(id=4, token=" Tower"),
+            TokenOrSeqRef(id=1, token=" E"),
+            TokenOrSeqRef(id=2, token="iff"),
+            TokenOrSeqRef(id=3, token="el"),
+            TokenOrSeqRef(id=4, token=" Tower"),
         ],
     )
-    tag_by_text_regex(sample, r"(?i)eiffel", "entity", mode=TextTagMode.FIRST)
+    sample.tag_by_text_regex(r"(?i)eiffel", "entity", mode=TextTagMode.FIRST)
     tagged = _annotated_tokens(sample, "entity")
     assert len(tagged) == 1
     assert tagged[0].token == " E"
@@ -253,13 +260,13 @@ def test_tag_by_text_regex_last():
     sample = Sample(
         id="bpe",
         tokens=[
-            Token(id=1, token=" E"),
-            Token(id=2, token="iff"),
-            Token(id=3, token="el"),
-            Token(id=4, token=" Tower"),
+            TokenOrSeqRef(id=1, token=" E"),
+            TokenOrSeqRef(id=2, token="iff"),
+            TokenOrSeqRef(id=3, token="el"),
+            TokenOrSeqRef(id=4, token=" Tower"),
         ],
     )
-    tag_by_text_regex(sample, r"(?i)eiffel", "entity", mode=TextTagMode.LAST)
+    sample.tag_by_text_regex(r"(?i)eiffel", "entity", mode=TextTagMode.LAST)
     tagged = _annotated_tokens(sample, "entity")
     assert len(tagged) == 1
     assert tagged[0].token == "el"
@@ -268,9 +275,12 @@ def test_tag_by_text_regex_last():
 def test_tag_by_text_regex_no_match():
     sample = Sample(
         id="x",
-        tokens=[Token(id=1, token="hello"), Token(id=2, token=" world")],
+        tokens=[
+            TokenOrSeqRef(id=1, token="hello"),
+            TokenOrSeqRef(id=2, token=" world"),
+        ],
     )
-    tag_by_text_regex(sample, r"xyz", "nope")
+    sample.tag_by_text_regex(r"xyz", "nope")
     assert sample.annotation_positions("nope") == []
 
 
@@ -278,7 +288,7 @@ def test_tag_special_tokens(sample_flat):
     class MockTokenizer:
         all_special_ids = [50256]
 
-    tag_special_tokens(sample_flat, MockTokenizer())
+    sample_flat.tag_special_tokens(MockTokenizer())
     tagged = _annotated_tokens(sample_flat, "special")
     assert len(tagged) == 1
     assert tagged[0].id == 50256
@@ -327,10 +337,10 @@ def test_tag_chat_roles_basic():
     formatted = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=False
     )
-    tokens = [Token(id=tid, token=chr(tid)) for tid in formatted]
+    tokens = [TokenOrSeqRef(id=tid, token=chr(tid)) for tid in formatted]
     sample = Sample(id="test", tokens=tokens)
 
-    tag_chat_roles(sample, messages, tokenizer)
+    sample.tag_chat_roles(messages, tokenizer)
 
     annotated = set()
     for annotation in sample.annotations:
@@ -351,10 +361,10 @@ def test_tag_chat_roles_template_tokens():
     formatted = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=False
     )
-    tokens = [Token(id=tid, token=chr(tid)) for tid in formatted]
+    tokens = [TokenOrSeqRef(id=tid, token=chr(tid)) for tid in formatted]
     sample = Sample(id="test", tokens=tokens)
 
-    tag_chat_roles(sample, messages, tokenizer)
+    sample.tag_chat_roles(messages, tokenizer)
 
     # "<s>[user]" = template, "Hi" = user, "[/user]" = template
     # First 3 chars are "<s>" = template
@@ -382,18 +392,18 @@ def test_tag_chat_roles_with_sequences():
     formatted = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=False
     )
-    all_tokens = [Token(id=tid, token=chr(tid)) for tid in formatted]
+    all_tokens = [TokenOrSeqRef(id=tid, token=chr(tid)) for tid in formatted]
 
     # Simulate dedup: "<s>[user]" (first 9 chars) becomes a sequence
-    seq_toks = [Token(id=t.id, token=t.token) for t in all_tokens[:9]]
+    seq_toks = [TokenOrSeqRef(id=t.id, token=t.token) for t in all_tokens[:9]]
     seq = Sequence(id="seq_0", n_tokens=len(seq_toks), tokens=seq_toks)
     # Sample has: ref + "H" + "i" + "[" + "/" + "u" + "s" + "e" + "r" + "]"
-    sample_tokens = [Token(id=-1, sequence_id="seq_0")] + [
-        Token(id=t.id, token=t.token) for t in all_tokens[9:]
+    sample_tokens = [TokenOrSeqRef(id=None, token="seq_0")] + [
+        TokenOrSeqRef(id=t.id, token=t.token) for t in all_tokens[9:]
     ]
     sample = Sample(id="test", tokens=sample_tokens)
 
-    tag_chat_roles(sample, messages, tokenizer, sequences=[seq])
+    sample.tag_chat_roles(messages, tokenizer, sequences=[seq])
 
     # Ref token should be annotated as template.
     assert sample.annotation_positions("template")[0] == 0
@@ -404,7 +414,7 @@ def test_tag_chat_roles_with_sequences():
 
 
 def test_tag_chat_roles_doc_basic():
-    """tag_chat_roles_doc annotates all samples in a document."""
+    """InifDocument.tag_chat_roles annotates all samples in a document."""
     tokenizer = ChatMockTokenizer()
     messages_list = [
         [{"role": "user", "content": "Hi"}],
@@ -416,14 +426,14 @@ def test_tag_chat_roles_doc_basic():
         formatted = tokenizer.apply_chat_template(
             msgs, tokenize=True, add_generation_prompt=False
         )
-        tokens = [Token(id=tid, token=chr(tid)) for tid in formatted]
+        tokens = [TokenOrSeqRef(id=tid, token=chr(tid)) for tid in formatted]
         samples.append(Sample(id=f"s{i}", tokens=tokens))
 
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="test")),
         samples=samples,
     )
-    tag_chat_roles_doc(doc, messages_list, tokenizer)
+    doc.tag_chat_roles(messages_list, tokenizer)
 
     for sample in doc.samples:
         assert sample.annotation_positions("user")

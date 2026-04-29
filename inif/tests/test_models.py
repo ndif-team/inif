@@ -8,8 +8,9 @@ from inif.models import (
     Sample,
     Sequence,
     Span,
-    Token,
+    Text,
     TokenAnnotation,
+    TokenOrSeqRef,
 )
 
 
@@ -25,7 +26,7 @@ def test_sequence_validation_n_tokens():
     with pytest.raises(ValidationError, match="n_tokens must equal"):
         Sequence(
             id="s0",
-            tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+            tokens=[TokenOrSeqRef(id=1, token="a"), TokenOrSeqRef(id=2, token="b")],
             n_tokens=1,
         )
 
@@ -34,7 +35,10 @@ def test_sequence_valid():
     s = Sequence(
         id="seq_0",
         n_tokens=2,
-        tokens=[Token(id=1, token="hello"), Token(id=2, token=" world")],
+        tokens=[
+            TokenOrSeqRef(id=1, token="hello"),
+            TokenOrSeqRef(id=2, token=" world"),
+        ],
     )
     assert len(s.tokens) == 2
     assert [t.id for t in s.tokens] == [1, 2]
@@ -42,15 +46,15 @@ def test_sequence_valid():
 
 
 def test_token_is_sequence_ref():
-    t_regular = Token(id=100, token="hello")
+    t_regular = TokenOrSeqRef(id=100, token="hello")
     assert not t_regular.is_sequence_ref
 
-    t_ref = Token(id=-1, sequence_id="seq_0")
+    t_ref = TokenOrSeqRef(id=None, token="seq_0")
     assert t_ref.is_sequence_ref
 
 
 def test_token_expanded_tokens(sequences):
-    ref = Token(id=-1, sequence_id="seq_0")
+    ref = TokenOrSeqRef(id=None, token="seq_0")
     expanded = ref.expanded_tokens(sequences)
     assert len(expanded) == 3
     assert expanded[0].id == 50256
@@ -59,38 +63,40 @@ def test_token_expanded_tokens(sequences):
     assert expanded[1].token == "This"
     assert expanded[2].id == 318
     assert expanded[2].token == " is"
+    # Expanded tokens are vocab tokens; the convenience property returns None.
     assert all(t.sequence_id is None for t in expanded)
+    assert all(t.id is not None for t in expanded)
 
 
 def test_token_expanded_regular(sequences):
-    t = Token(id=100, token="hello")
+    t = TokenOrSeqRef(id=100, token="hello")
     expanded = t.expanded_tokens(sequences)
     assert len(expanded) == 1
     assert expanded[0] is t
 
 
 def test_token_expanded_missing_sequence():
-    ref = Token(id=-1, sequence_id="nonexistent")
+    ref = TokenOrSeqRef(id=None, token="nonexistent")
     with pytest.raises(AssertionError, match="not found"):
         ref.expanded_tokens([])
 
 
 def test_token_extra_fields():
-    t = Token(id=1, token="hello", source="user", logprob=-0.5)
+    t = TokenOrSeqRef(id=1, token="hello", source="user", logprob=-0.5)
     assert t.get_extra("source") == "user"
     assert t.get_extra("logprob") == -0.5
 
 
 def test_token_extra_roundtrip():
-    t = Token(id=1, token="hello", custom_data={"key": "value"})
+    t = TokenOrSeqRef(id=1, token="hello", custom_data={"key": "value"})
     d = t.model_dump()
     assert d["custom_data"] == {"key": "value"}
-    t2 = Token.model_validate(d)
+    t2 = TokenOrSeqRef.model_validate(d)
     assert t2.get_extra("custom_data") == {"key": "value"}
 
 
 def test_token_set_get_pop_extra():
-    t = Token(id=1, token="x")
+    t = TokenOrSeqRef(id=1, token="x")
     assert t.get_extra("logprob") is None
     assert t.get_extra("logprob", 0.0) == 0.0
     assert not t.has_extra("logprob")
@@ -114,7 +120,11 @@ def test_token_set_get_pop_extra():
 def test_sample_annotation_api():
     s = Sample(
         id="x",
-        tokens=[Token(id=1, token="a"), Token(id=2, token="b"), Token(id=3, token="c")],
+        tokens=[
+            TokenOrSeqRef(id=1, token="a"),
+            TokenOrSeqRef(id=2, token="b"),
+            TokenOrSeqRef(id=3, token="c"),
+        ],
     )
 
     s.annotate_positions("foo", [0, 2])
@@ -128,7 +138,7 @@ def test_sample_annotation_api():
 
 
 def test_token_extras_property():
-    t = Token(id=1, token="x", source="user", logprob=-0.5)
+    t = TokenOrSeqRef(id=1, token="x", source="user", logprob=-0.5)
     assert t.extras == {"source": "user", "logprob": -0.5}
 
 
@@ -273,12 +283,12 @@ def test_document_subset_filters_and_prunes_sequences():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="t")),
         sequences=[
-            Sequence(id="s_keep", tokens=[Token(id=1, token="a")], n_tokens=1),
-            Sequence(id="s_drop", tokens=[Token(id=2, token="b")], n_tokens=1),
+            Sequence(id="s_keep", tokens=[TokenOrSeqRef(id=1, token="a")], n_tokens=1),
+            Sequence(id="s_drop", tokens=[TokenOrSeqRef(id=2, token="b")], n_tokens=1),
         ],
         samples=[
-            Sample(id="alpha", tokens=[Token(id=-1, sequence_id="s_keep")]),
-            Sample(id="beta", tokens=[Token(id=-1, sequence_id="s_drop")]),
+            Sample(id="alpha", tokens=[TokenOrSeqRef(id=None, token="s_keep")]),
+            Sample(id="beta", tokens=[TokenOrSeqRef(id=None, token="s_drop")]),
         ],
     )
     sub = doc.subset(lambda s: s.id == "alpha")
@@ -306,10 +316,10 @@ def test_document_subset_deep_copies_tokens_and_sequences():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="t")),
         sequences=[
-            Sequence(id="seq", tokens=[Token(id=1, token="a")], n_tokens=1),
+            Sequence(id="seq", tokens=[TokenOrSeqRef(id=1, token="a")], n_tokens=1),
         ],
         samples=[
-            Sample(id="x", tokens=[Token(id=-1, sequence_id="seq")]),
+            Sample(id="x", tokens=[TokenOrSeqRef(id=None, token="seq")]),
         ],
     )
 
@@ -330,21 +340,28 @@ def test_metadata_created_at_is_datetime():
     assert m.created_at == datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
 
-def test_token_defaults():
-    # Sequence-ref tokens may omit ``token``; vocabulary tokens must provide it.
-    t = Token(id=-1, sequence_id="seq_x")
-    assert t.token is None
+def test_token_ref_uses_token_field_for_sequence_id():
+    # Sequence-ref tokens have ``id is None``; the target Sequence id lives
+    # in ``token``. The ``sequence_id`` convenience property returns it.
+    t = TokenOrSeqRef(id=None, token="seq_x")
+    assert t.is_sequence_ref
+    assert t.token == "seq_x"
     assert t.sequence_id == "seq_x"
 
 
-def test_token_invariant_vocab_requires_token_string():
-    with pytest.raises(ValidationError, match="must have a token string"):
-        Token(id=1)
+def test_token_vocab_has_no_sequence_id():
+    t = TokenOrSeqRef(id=42, token="hello")
+    assert not t.is_sequence_ref
+    assert t.sequence_id is None
 
 
-def test_token_invariant_ref_requires_sequence_id():
-    with pytest.raises(ValidationError, match="must have sequence_id"):
-        Token(id=-1)
+def test_token_invariant_token_field_required():
+    # ``token`` is a required string — both vocab tokens and sequence refs
+    # must supply one. Pydantic rejects the missing field at validation time.
+    with pytest.raises(ValidationError):
+        TokenOrSeqRef(id=1)
+    with pytest.raises(ValidationError):
+        TokenOrSeqRef(id=None)
 
 
 def test_sample_id_is_coerced_to_str():
@@ -357,7 +374,7 @@ def test_span_positions_validated_against_tokens():
     with pytest.raises(ValidationError, match="out of range"):
         Sample(
             id="x",
-            tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+            tokens=[TokenOrSeqRef(id=1, token="a"), TokenOrSeqRef(id=2, token="b")],
             spans=[Span(name="bad", positions=[0, 5])],
         )
 
@@ -365,7 +382,7 @@ def test_span_positions_validated_against_tokens():
 def test_span_positions_in_bounds_ok():
     s = Sample(
         id="x",
-        tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+        tokens=[TokenOrSeqRef(id=1, token="a"), TokenOrSeqRef(id=2, token="b")],
         spans=[Span(name="ok", positions=[0, 1])],
     )
     assert s.spans[0].positions == [0, 1]
@@ -375,7 +392,7 @@ def test_annotation_ranges_validated_against_tokens():
     with pytest.raises(ValidationError, match="out of range"):
         Sample(
             id="x",
-            tokens=[Token(id=1, token="a"), Token(id=2, token="b")],
+            tokens=[TokenOrSeqRef(id=1, token="a"), TokenOrSeqRef(id=2, token="b")],
             annotations=[TokenAnnotation(name="bad", ranges=[(0, 3)])],
         )
 
@@ -383,10 +400,68 @@ def test_annotation_ranges_validated_against_tokens():
 def test_annotation_ranges_are_merged():
     s = Sample(
         id="x",
-        tokens=[Token(id=1, token="a"), Token(id=2, token="b"), Token(id=3, token="c")],
+        tokens=[
+            TokenOrSeqRef(id=1, token="a"),
+            TokenOrSeqRef(id=2, token="b"),
+            TokenOrSeqRef(id=3, token="c"),
+        ],
         annotations=[TokenAnnotation(name="ok", ranges=[(1, 2), (0, 1)])],
     )
     assert s.annotations[0].ranges == [(0, 2)]
+
+
+def test_duplicate_annotation_names_rejected_at_construction():
+    """Two annotation entries sharing a name are forbidden — ``Sample.annotations``
+    is keyed by name."""
+    with pytest.raises(ValidationError, match="Duplicate annotation name 'role'"):
+        Sample(
+            id="x",
+            tokens=[TokenOrSeqRef(id=1, token="a"), TokenOrSeqRef(id=2, token="b")],
+            annotations=[
+                TokenAnnotation(name="role", ranges=[(0, 1)], metadata={"src": "a"}),
+                TokenAnnotation(name="role", ranges=[(1, 2)], metadata={"src": "b"}),
+            ],
+        )
+
+
+def test_annotate_same_name_merges_into_existing_entry():
+    """Subsequent ``annotate`` calls with the same name extend the existing
+    entry's ranges instead of creating a new one — metadata of the second
+    call is ignored, the existing metadata is preserved."""
+    s = Sample(
+        id="x",
+        tokens=[
+            TokenOrSeqRef(id=1, token="a"),
+            TokenOrSeqRef(id=2, token="b"),
+            TokenOrSeqRef(id=3, token="c"),
+        ],
+    )
+    s.annotate_positions("role", [0], metadata={"src": "a"})
+    # Same name, different metadata — merges ranges, keeps original metadata.
+    s.annotate_positions("role", [2], metadata={"src": "b"})
+    assert len(s.annotations) == 1
+    assert s.annotations[0].name == "role"
+    assert s.annotations[0].ranges == [(0, 1), (2, 3)]
+    assert s.annotations[0].metadata == {"src": "a"}
+
+
+def test_annotate_overlapping_ranges_are_collapsed():
+    """Adding overlapping or adjacent ranges to the same name collapses them
+    into a single span (e.g. existing ``[5, 7)`` + new ``[6, 10)`` →
+    ``[5, 10)``)."""
+    s = Sample(
+        id="x",
+        tokens=[TokenOrSeqRef(id=i, token=chr(ord("a") + i)) for i in range(12)],
+    )
+    s.annotate("ann", [(5, 7)])
+    s.annotate("ann", [(6, 10)])
+    assert s.annotations[0].ranges == [(5, 10)]
+    # Adjacent (touching but not overlapping) ranges also collapse.
+    s.annotate("ann", [(10, 12)])
+    assert s.annotations[0].ranges == [(5, 12)]
+    # An island that doesn't touch stays as a separate range.
+    s.annotate("ann", [(0, 2)])
+    assert s.annotations[0].ranges == [(0, 2), (5, 12)]
 
 
 def test_sample_defaults():
@@ -400,7 +475,64 @@ def test_sample_defaults():
     assert s.metadata == {}
 
 
-def test_sample_texts_are_strings():
-    s = Sample(id="x", texts=["Hello", "World"])
-    assert s.texts == ["Hello", "World"]
-    assert isinstance(s.texts[0], str)
+def test_sample_texts_are_text_objects():
+    s = Sample(
+        id="x",
+        texts=[
+            Text(name="text_0", value="Hello"),
+            Text(name="text_1", value="World", metadata={"source": "demo"}),
+        ],
+    )
+    assert [t.name for t in s.texts] == ["text_0", "text_1"]
+    assert [t.value for t in s.texts] == ["Hello", "World"]
+    assert s.texts[0].metadata == {}
+    assert s.texts[1].metadata == {"source": "demo"}
+
+
+def test_text_start_end_validation():
+    # Both unset is fine.
+    t = Text(name="x", value="y")
+    assert t.start is None and t.end is None
+
+    # Both set, valid range.
+    t = Text(name="x", value="y", start=0, end=5)
+    assert (t.start, t.end) == (0, 5)
+
+    # Empty range is allowed (a chat message that produced no tokens).
+    Text(name="x", value="y", start=3, end=3)
+
+    # Negative start.
+    with pytest.raises(ValidationError, match="invalid range"):
+        Text(name="x", value="y", start=-1, end=2)
+    # End before start.
+    with pytest.raises(ValidationError, match="invalid range"):
+        Text(name="x", value="y", start=5, end=3)
+    # Setting only one of the two raises.
+    with pytest.raises(ValidationError, match="must set both"):
+        Text(name="x", value="y", start=0)
+    with pytest.raises(ValidationError, match="must set both"):
+        Text(name="x", value="y", end=5)
+
+
+def test_replace_token_with_tokens_shifts_text_offsets():
+    # Replacing a single ref token with N expanded tokens should push every
+    # text whose range starts after the replacement by ``N - 1`` positions
+    # and stretch the text containing the replacement.
+    s = Sample(
+        id="x",
+        tokens=[
+            TokenOrSeqRef(id=None, token="seq_0"),  # ref at index 0
+            TokenOrSeqRef(id=2, token="b"),
+            TokenOrSeqRef(id=3, token="c"),
+        ],
+        texts=[
+            Text(name="t0", value="ab", start=0, end=2),
+            Text(name="t1", value="c", start=2, end=3),
+        ],
+    )
+    s._replace_token_with_tokens(
+        0,
+        [TokenOrSeqRef(id=10, token="x"), TokenOrSeqRef(id=11, token="y")],
+    )
+    assert (s.texts[0].start, s.texts[0].end) == (0, 3)
+    assert (s.texts[1].start, s.texts[1].end) == (3, 4)

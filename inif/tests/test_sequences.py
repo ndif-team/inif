@@ -3,13 +3,12 @@ from inif.models import (
     Metadata,
     ModelInfo,
     Sample,
-    Token,
+    TokenOrSeqRef,
 )
-from inif.sequences import deduplicate_sequences, expand_sequences
 
 
 def test_deduplicate_basic(doc_for_dedup):
-    deduped = deduplicate_sequences(doc_for_dedup, min_length=3)
+    deduped = doc_for_dedup.deduplicate_sequences(min_length=3)
     assert len(deduped.sequences) == 1
     seq = deduped.sequences[0]
     assert [t.token for t in seq.tokens] == ["<|endoftext|>", "This", " is"]
@@ -21,12 +20,42 @@ def test_deduplicate_basic(doc_for_dedup):
         assert sample.tokens[0].sequence_id == seq.id
 
 
+def test_deduplicate_default_min_length_is_five():
+    """The default ``min_length=5`` means a 3-token shared prefix is NOT
+    captured unless callers opt in to a smaller window."""
+
+    def toks(names):
+        return [TokenOrSeqRef(id=ord(name[0]), token=name) for name in names]
+
+    short_doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="test")),
+        samples=[
+            Sample(id="s0", tokens=toks(["a", "b", "c", "x"])),
+            Sample(id="s1", tokens=toks(["a", "b", "c", "y"])),
+        ],
+    )
+    # Length-3 shared run, default min_length=5 → no dedup.
+    assert short_doc.deduplicate_sequences().sequences == []
+
+    long_doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="test")),
+        samples=[
+            Sample(id="s0", tokens=toks(["a", "b", "c", "d", "e", "x"])),
+            Sample(id="s1", tokens=toks(["a", "b", "c", "d", "e", "y"])),
+        ],
+    )
+    # Length-5 shared run, default min_length=5 → captured.
+    deduped = long_doc.deduplicate_sequences()
+    assert len(deduped.sequences) == 1
+    assert [t.token for t in deduped.sequences[0].tokens] == ["a", "b", "c", "d", "e"]
+
+
 def test_deduplicate_extends_later_anchor_occurrence():
     """All sample-0 anchor occurrences must be considered for maximal matches."""
     ids = {"a": 1, "b": 2, "x": 3, "c": 4}
 
     def toks(names):
-        return [Token(id=ids[name], token=name) for name in names]
+        return [TokenOrSeqRef(id=ids[name], token=name) for name in names]
 
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="test")),
@@ -36,7 +65,7 @@ def test_deduplicate_extends_later_anchor_occurrence():
         ],
     )
 
-    deduped = deduplicate_sequences(doc, min_length=2)
+    deduped = doc.deduplicate_sequences(min_length=2)
 
     assert len(deduped.sequences) == 1
     assert [t.token for t in deduped.sequences[0].tokens] == ["a", "b", "c"]
@@ -45,8 +74,8 @@ def test_deduplicate_extends_later_anchor_occurrence():
 
 
 def test_expand_basic(doc_for_dedup):
-    deduped = deduplicate_sequences(doc_for_dedup, min_length=3)
-    expanded = expand_sequences(deduped)
+    deduped = doc_for_dedup.deduplicate_sequences(min_length=3)
+    expanded = deduped.expand_sequences()
 
     # After expanding, each sample should have 4 flat tokens again
     for sample in expanded.samples:
@@ -55,8 +84,8 @@ def test_expand_basic(doc_for_dedup):
 
 
 def test_roundtrip_dedup_expand(doc_for_dedup):
-    deduped = deduplicate_sequences(doc_for_dedup, min_length=3)
-    expanded = expand_sequences(deduped)
+    deduped = doc_for_dedup.deduplicate_sequences(min_length=3)
+    expanded = deduped.expand_sequences()
 
     for orig, exp in zip(doc_for_dedup.samples, expanded.samples):
         orig_strs = [t.token for t in orig.tokens]
@@ -70,29 +99,29 @@ def test_roundtrip_dedup_expand(doc_for_dedup):
 
 def test_dedup_preserves_extra_field_tokens():
     """Tokens with extra fields should never be collapsed."""
-    tok_with_data = Token(id=2, token="b", data={"logit_lens": {"layer_0": {}}})
+    tok_with_data = TokenOrSeqRef(id=2, token="b", data={"logit_lens": {"layer_0": {}}})
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="test")),
         samples=[
             Sample(
                 id="s0",
                 tokens=[
-                    Token(id=1, token="a"),
+                    TokenOrSeqRef(id=1, token="a"),
                     tok_with_data,
-                    Token(id=3, token="c"),
+                    TokenOrSeqRef(id=3, token="c"),
                 ],
             ),
             Sample(
                 id="s1",
                 tokens=[
-                    Token(id=1, token="a"),
-                    Token(id=2, token="b"),
-                    Token(id=3, token="c"),
+                    TokenOrSeqRef(id=1, token="a"),
+                    TokenOrSeqRef(id=2, token="b"),
+                    TokenOrSeqRef(id=3, token="c"),
                 ],
             ),
         ],
     )
-    deduped = deduplicate_sequences(doc, min_length=3)
+    deduped = doc.deduplicate_sequences(min_length=3)
     # s0 has a token with extra data, so the sequence "a","b","c" can't be
     # fully matched in s0. The intersection algorithm needs the sequence
     # present in ALL samples (without extra fields). Since s0's token list
@@ -106,12 +135,12 @@ def test_deduplicate_returns_independent_tokens():
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="test")),
         samples=[
-            Sample(id="s0", tokens=[Token(id=1, token="a")]),
-            Sample(id="s1", tokens=[Token(id=2, token="b")]),
+            Sample(id="s0", tokens=[TokenOrSeqRef(id=1, token="a")]),
+            Sample(id="s1", tokens=[TokenOrSeqRef(id=2, token="b")]),
         ],
     )
 
-    deduped = deduplicate_sequences(doc, min_length=2)
+    deduped = doc.deduplicate_sequences(min_length=2)
     deduped.samples[0].tokens[0].set_extra("changed", True)
 
     assert deduped.samples[0].tokens[0].get_extra("changed") is True
@@ -125,15 +154,15 @@ def test_dedup_no_duplicates():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=i + 1, token=f"t{i}") for i in range(3)],
+                tokens=[TokenOrSeqRef(id=i + 1, token=f"t{i}") for i in range(3)],
             ),
             Sample(
                 id="s1",
-                tokens=[Token(id=i + 10, token=f"u{i}") for i in range(3)],
+                tokens=[TokenOrSeqRef(id=i + 10, token=f"u{i}") for i in range(3)],
             ),
         ],
     )
-    deduped = deduplicate_sequences(doc, min_length=3)
+    deduped = doc.deduplicate_sequences(min_length=3)
     assert len(deduped.sequences) == 0
 
 
@@ -144,11 +173,11 @@ def test_expand_preserves_non_ref_tokens():
         samples=[
             Sample(
                 id="s0",
-                tokens=[Token(id=i + 1, token=f"t{i}") for i in range(3)],
+                tokens=[TokenOrSeqRef(id=i + 1, token=f"t{i}") for i in range(3)],
             ),
         ],
     )
-    expanded = expand_sequences(doc)
+    expanded = doc.expand_sequences()
     assert len(expanded.samples[0].tokens) == 3
     assert expanded.samples[0].tokens[0].id == 1
 
@@ -164,25 +193,25 @@ def test_dedup_skips_window_with_mismatched_ids():
             Sample(
                 id="s0",
                 tokens=[
-                    Token(id=10, token="a"),
-                    Token(id=20, token="b"),
-                    Token(id=30, token="c"),
-                    Token(id=99, token="x"),
+                    TokenOrSeqRef(id=10, token="a"),
+                    TokenOrSeqRef(id=20, token="b"),
+                    TokenOrSeqRef(id=30, token="c"),
+                    TokenOrSeqRef(id=99, token="x"),
                 ],
             ),
             Sample(
                 id="s1",
                 tokens=[
-                    Token(id=10, token="a"),
+                    TokenOrSeqRef(id=10, token="a"),
                     # Same string "b" but DIFFERENT id; must block replacement.
-                    Token(id=21, token="b"),
-                    Token(id=30, token="c"),
-                    Token(id=88, token="y"),
+                    TokenOrSeqRef(id=21, token="b"),
+                    TokenOrSeqRef(id=30, token="c"),
+                    TokenOrSeqRef(id=88, token="y"),
                 ],
             ),
         ],
     )
-    deduped = deduplicate_sequences(doc, min_length=3)
+    deduped = doc.deduplicate_sequences(min_length=3)
     # Sequence is created from sample 0's ids.
     assert len(deduped.sequences) == 1
     assert [t.id for t in deduped.sequences[0].tokens] == [10, 20, 30]
@@ -197,8 +226,8 @@ def test_expanded_tokens_drop_sequence_provenance(doc_for_dedup):
     """expand_sequences should produce plain vocab tokens (no
     ``sequence_id``) and drop the sequences list — running dedup again
     rediscovers the same shared runs."""
-    deduped = deduplicate_sequences(doc_for_dedup, min_length=3)
-    expanded = expand_sequences(deduped)
+    deduped = doc_for_dedup.deduplicate_sequences(min_length=3)
+    expanded = deduped.expand_sequences()
 
     assert expanded.sequences == []
     expected_ids = [50256, 1212, 318]
