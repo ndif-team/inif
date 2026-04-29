@@ -1,58 +1,27 @@
 ---
 title: inif.tagging
-description: Add named annotations to tokens via regex, predicate, or chat-template role matching.
+description: Type aliases and modes for the tagging methods on Sample / InifDocument.
 reference: inif.tagging
 ---
 
-Helpers that wrap `Sample.annotate_positions` with the most common matching
-strategies. See [Tagging tokens](../workflows/tagging.qmd) for usage
-patterns and the difference between token-string and concatenated-text
-matching.
+Tagging is exposed as methods on [`Sample`](inif.models.qmd) and
+[`InifDocument`](inif.models.qmd) — `tag_by_regex`, `tag_by_regexes`,
+`tag_by_text_regex`, `tag_by_predicate`, `tag_by_predicates`,
+`tag_chat_roles`, `tag_special_tokens`, `create_span_from_tag`. This
+module re-exports the supporting types so callers building up batched
+tagger lists can spell them out.
+
+See [Tagging tokens](../workflows/tagging.qmd) for usage patterns and the
+difference between token-string and concatenated-text matching.
 
 ## Modes
 
 ### TextTagMode
 
-## Regex over token strings
+## Type aliases
 
-### tag_by_regex
+### RegexTag
 
-### tag_by_regex_all
+### PredicateTag
 
-### tag_by_regexes
-
-### tag_by_regexes_all
-
-## Regex over concatenated text
-
-### tag_by_text_regex
-
-### tag_by_text_regex_all
-
-## Predicate-based
-
-### tag_by_predicate
-
-### tag_by_predicates
-
-### tag_by_predicates_all
-
-## Position and special tokens
-
-### tag_positions
-
-### tag_special_tokens
-
-## Chat roles
-
-### tag_chat_roles
-
-### tag_chat_roles_doc
-
-## Removal and conversion
-
-### remove_tag
-
-### remove_tag_all
-
-### create_span_from_tag
+### TokenPredicate

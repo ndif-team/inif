@@ -1,16 +1,12 @@
 ---
 title: inif.sequences
-description: Find shared token runs across samples and replace them with sequence references.
+description: Sequence (de)duplication implementations powering InifDocument.deduplicate_sequences and .expand_sequences.
 reference: inif.sequences
 ---
 
-The dedup pass finds contiguous token n-grams common to *all* samples and
-replaces each match with a single sequence-ref token. Expansion is the
-inverse. See [Sequences and deduplication](../concepts/sequences.qmd) for
-the algorithm and tuning guidance.
+Sequence (de)duplication is exposed as methods on
+[`InifDocument`](inif.models.qmd) — `deduplicate_sequences(min_length=5)`
+and `expand_sequences()`. The implementations live in this module.
 
-## Operations
-
-### deduplicate_sequences
-
-### expand_sequences
+See [Sequences and deduplication](../concepts/sequences.qmd) for the
+algorithm and tuning guidance.

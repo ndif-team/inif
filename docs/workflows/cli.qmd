@@ -55,7 +55,7 @@ Sequence deduplication runs by default — pass `--no-dedup` to skip it.
 |---|---|---|
 | `-m, --model` | required | Tokenizer model id (passed to `AutoTokenizer.from_pretrained`). |
 | `--revision` | unset | Pinned model revision. Stamped into `metadata.model.revision`. |
-| `--min-seq-length` | `3` | Minimum n-gram length for sequence dedup. |
+| `--min-seq-length` | `5` | Minimum n-gram length for sequence dedup. |
 | `--glob` | `*.txt` | When an input is a directory, glob pattern to filter files. |
 | `--no-dedup` | off | Disable sequence deduplication. |
 | `-o, --output` | first input's name with `.inif.json` | Output path. |
@@ -75,7 +75,7 @@ inif convert eval logs/run.eval --no-tag-chat-roles --no-dedup
 |---|---|---|
 | `-m, --model` | autodetect | Tokenizer override. By default, the tokenizer is auto-loaded from the eval's model id (with routing prefixes like `together/` stripped). See [Tokenizer resolution](../converters/tokenizers.qmd). |
 | `--revision` | unset | Pin `metadata.model.revision`. |
-| `--min-seq-length` | `3` | Sequence dedup minimum. |
+| `--min-seq-length` | `5` | Sequence dedup minimum. |
 | `--no-tag-chat-roles` | off | Skip chat-template role annotations. |
 | `--no-dedup` | off | Skip sequence deduplication. |
 | `-o, --output` | input stem with `.inif.json` | Output path. |
@@ -112,7 +112,7 @@ inif convert evaleval --hf-config theory_of_mind_samples \
 | `--limit` | unset | Cap the number of records converted. |
 | `-m, --model` | autodetect | Tokenizer override. Same rules as `convert eval`. |
 | `--revision` | unset | Pin `metadata.model.revision`. |
-| `--min-seq-length` | `3` | Sequence dedup minimum. |
+| `--min-seq-length` | `5` | Sequence dedup minimum. |
 | `--no-tag-chat-roles` | off | Skip chat-template role annotations. |
 | `--no-dedup` | off | Skip sequence deduplication. |
 | `-o, --output` | derived from input or HF config | Output path. |

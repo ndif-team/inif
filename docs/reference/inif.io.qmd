@@ -1,21 +1,19 @@
 ---
 title: inif.io
-description: Save and load INIF documents — suffix-based dispatch plus the unified read API for both .inif and .inif.json.
+description: Path-based readers for INIF documents — unified across .inif and .inif.json.
 reference: inif.io
 ---
 
-`save` and `load` are the two-way entry points; both dispatch on the path
-suffix (`.inif` ⇒ indexed archive, `.inif.json` ⇒ plain JSON). The
-unified read API (`iter_samples`, `read_samples`, `read_info`) abstracts
-over the same dispatch, so callers don't need to branch on file format.
-For the indexed-archive writer and lower-level options see
+The path-based unified read API in `inif.io` works on both formats —
+`.inif` indexed archives and plain `.inif.json` files. Pass any supported
+path; the dispatcher routes to the indexed-archive readers or to the full
+document loader as appropriate.
+
+For symmetric save / load / `to_dict` / `from_dict` see the methods on
+[`InifDocument`](inif.models.qmd) — those are the entry points for the
+common write / read cycle. The lower-level indexed-archive options
+(custom compression, partial loads) live in
 [`inif.indexed`](inif.indexed.qmd).
-
-## Saving and loading
-
-### save
-
-### load
 
 ## Unified read API
 
@@ -26,9 +24,3 @@ For the indexed-archive writer and lower-level options see
 ### read_info
 
 ### DocumentInfo
-
-## Dict conversion
-
-### to_dict
-
-### from_dict

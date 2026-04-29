@@ -125,21 +125,15 @@ def test_load_rejects_compress_override(doc):
             InifDocument.load(path, compress=False)
 
 
-def test_gzip_suffix_is_rejected(doc):
-    """INIF now has two storage modes: plain JSON or indexed .inif archives."""
+def test_unsupported_suffix_is_rejected(doc):
+    """Save / load only accept ``.inif.json``, ``.json``, and ``.inif``."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "test.json.gz"
-        with pytest.raises(AssertionError, match="gzip"):
-            doc.save(path)
-
-
-def test_inifx_suffix_is_rejected(doc):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "test.inifx"
-        with pytest.raises(AssertionError, match="inifx"):
-            doc.save(path)
-        with pytest.raises(AssertionError, match="inifx"):
-            InifDocument.load(path)
+        for name in ("test.json.gz", "test.inifx", "test.bin"):
+            path = Path(tmpdir) / name
+            with pytest.raises(AssertionError, match="Unsupported INIF suffix"):
+                doc.save(path)
+            with pytest.raises(AssertionError, match="Unsupported INIF suffix"):
+                InifDocument.load(path)
 
 
 def test_minimal_document():

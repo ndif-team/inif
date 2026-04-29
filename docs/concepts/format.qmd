@@ -18,7 +18,7 @@ InifDocument
 └── samples[]         — tokenized generation traces
     ├── tokens[]      — TokenOrSeqRef entries (vocab tokens or sequence refs), plus sparse extras
     ├── annotations[] — named token ranges with optional metadata
-    ├── texts[]       — Text segments ({name, value, metadata})
+    ├── texts[]       — Text segments ({name, value, start, end, children, metadata})
     ├── spans[]       — named position ranges
     └── scores[]      — evaluation scores (scorer, value, answer)
 ```
@@ -68,7 +68,7 @@ A `Sample` is one self-contained tokenized trace. The required field is
 |---|---|---|
 | `id` | `str` | Unique within the document. Int ids (Inspect AI's default) are coerced to `str`. |
 | `tokens` | `list[TokenOrSeqRef]` | The token sequence — vocab tokens, sequence refs, or both. |
-| `texts` | `list[Text]` | Named text segments (one per chat message with a role-based name, or one per plain-text input). See [Tokens](tokens.qmd#text-segments). |
+| `texts` | `list[Text]` | Named text segments — one per chat message (with role-based name and a token range), or one per plain-text input. See [Tokens, Texts, and Extras](tokens.qmd#text-segments). |
 | `annotations` | `list[TokenAnnotation]` | Named half-open token ranges. See [Annotations](annotations.qmd). |
 | `spans` | `list[Span]` | Named position lists with optional tags / metadata. |
 | `scores` | `list[SampleScore]` | Per-scorer evaluation results. |
@@ -82,18 +82,19 @@ A `Sample` is one self-contained tokenized trace. The required field is
 | `total_time`, `input_tokens`, `output_tokens` | numeric | Usage / timing stats. |
 
 The first-class fields (`target`, `references`, `choices`,
-`interaction_type`, `error`, `sample_hash`) used to live under
-`Sample.metadata` for the evaleval converter; they were promoted so filters
-and viewers can rely on them without key archaeology.
+`interaction_type`, `error`, `sample_hash`) match the every_eval_ever
+schema so filters and viewers can read them without reaching into
+`metadata`.
 
 ::: {.callout-note appearance="minimal"}
 #### Sample-level validation
 
 Every `Sample` is validated at construction time: `span.positions` and
-`annotation.ranges` must lie within `len(tokens)`, and ranges must satisfy
-`0 <= start < end <= n`. Out-of-range positions raise `ValidationError`.
-This catches off-by-one bugs in custom converters before the document is
-ever saved.
+`annotation.ranges` must lie within `len(tokens)`, ranges must satisfy
+`0 <= start < end <= n`, and each annotation `name` may appear at most
+once. Out-of-range positions or duplicate annotation names raise
+`ValidationError`. This catches off-by-one bugs in custom converters
+before the document is ever saved.
 :::
 
 ## Sequences

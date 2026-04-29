@@ -1,16 +1,16 @@
 ---
 title: Selecting Tokens and Samples
 description: Picking out token positions and sample subsets using INIF's selectors.
-llms-description: Use select_by_position / select_by_annotation / select_by_span / select_by_sequence_id for tokens, and filter_samples_by_score / InifDocument.subset for samples.
+llms-description: Use Sample.select_by_position / select_by_annotation / select_by_span / select_by_sequence_id for tokens, and InifDocument.filter_samples_by_score / .subset for samples.
 ---
 
-INIF's selectors are intentionally tiny — a handful of pure functions that
-take a `Sample` (or `InifDocument`) and return a `TokenSelection` (or list).
-Compose them rather than building a query DSL.
+INIF's selectors are intentionally tiny — methods on `Sample` /
+`InifDocument` that return a `TokenSelection` (or list of samples) without
+mutating the input. Compose them rather than building a query DSL.
 
 ## TokenSelection
 
-Every token-level selector returns a `TokenSelection`:
+Every per-sample selector returns a `TokenSelection`:
 
 ``` python
 from inif import TokenSelection
@@ -20,25 +20,23 @@ from inif import TokenSelection
 @dataclass
 class TokenSelection:
     sample_id: str | int
-    tokens: list[Token]
+    tokens: list[TokenOrSeqRef]
     positions: list[int]
 ```
 
 `positions` always reflects the actual sample-local indices (sorted,
-deduplicated). `tokens` is the parallel list of `Token` objects pulled from
-those positions.
+deduplicated). `tokens` is the parallel list of `TokenOrSeqRef` objects
+pulled from those positions.
 
-## Token selectors
+## Token selectors (on `Sample`)
 
 ### By position
 
 ``` python
-from inif import select_by_position
-
-select_by_position(sample, 5)               # one position
-select_by_position(sample, [3, 5, 7])       # explicit list
-select_by_position(sample, slice(0, 10))    # slice
-select_by_position(sample, slice(-5, None)) # last 5
+sample.select_by_position(5)               # one position
+sample.select_by_position([3, 5, 7])       # explicit list
+sample.select_by_position(slice(0, 10))    # slice
+sample.select_by_position(slice(-5, None)) # last 5
 ```
 
 Slices are resolved against `len(sample.tokens)` via `slice.indices(n)`, so
@@ -48,9 +46,7 @@ of range integers are silently dropped (they just don't appear in `tokens`).
 ### By annotation
 
 ``` python
-from inif import select_by_annotation
-
-selection = select_by_annotation(sample, "generated")
+selection = sample.select_by_annotation("generated")
 ```
 
 Pulls every position covered by *any* annotation whose `name` matches —
@@ -60,9 +56,7 @@ so it works whether the annotation has one range or twenty.
 ### By sequence id
 
 ``` python
-from inif import select_by_sequence_id
-
-selection = select_by_sequence_id(sample, "seq_0")
+selection = sample.select_by_sequence_id("seq_0")
 ```
 
 Returns the sequence-ref tokens that point at `seq_0`. Useful for finding
@@ -71,25 +65,21 @@ Returns the sequence-ref tokens that point at `seq_0`. Useful for finding
 ### By span
 
 ``` python
-from inif import select_by_span
-
-selection = select_by_span(sample, "answer_span")
+selection = sample.select_by_span("answer_span")
 ```
 
 Unions the positions across every `Span` whose `name` matches.
 
-## Sample selectors
+## Sample selectors (on `InifDocument`)
 
 ### By score
 
 ``` python
-from inif import filter_samples_by_score
-
-failures = filter_samples_by_score(
-    doc, scorer="exact_match", predicate=lambda v: v == 0
+failures = doc.filter_samples_by_score(
+    scorer="exact_match", predicate=lambda v: v == 0
 )
-correct = filter_samples_by_score(
-    doc, scorer="exact_match", predicate=lambda v: v == 1
+correct = doc.filter_samples_by_score(
+    scorer="exact_match", predicate=lambda v: v == 1
 )
 ```
 
@@ -117,17 +107,13 @@ the kept samples, so the resulting document is independent and minimal.
 
 ## Composing selectors
 
-Selectors are pure — chain them however you want:
+Methods return plain lists / `TokenSelection`s — chain them however you want:
 
 ``` python
-from inif import filter_samples_by_score, select_by_annotation
-
-failures = filter_samples_by_score(
-    doc, scorer="exact_match", predicate=lambda v: v == 0
+failures = doc.filter_samples_by_score(
+    scorer="exact_match", predicate=lambda v: v == 0
 )
-generated_tokens = [
-    select_by_annotation(s, "generated") for s in failures
-]
+generated_tokens = [s.select_by_annotation("generated") for s in failures]
 ```
 
 Or pull positions across the whole document and feed them to nnsight /
@@ -136,7 +122,7 @@ nnterp:
 ``` python
 all_positions = []
 for sample in doc.samples:
-    sel = select_by_annotation(sample, "user")
+    sel = sample.select_by_annotation("user")
     for pos in sel.positions:
         all_positions.append((sample.id, pos))
 ```

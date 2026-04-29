@@ -1,7 +1,7 @@
 ---
 title: HTML Viewer
 description: Render an INIF document as a self-contained interactive HTML page.
-llms-description: render_html / save_html / show produce a standalone viewer with sample navigation, annotation highlighting, and per-token tooltips.
+llms-description: InifDocument.render_html / .save_html / .show produce a standalone viewer with sample navigation, annotation highlighting, and per-token tooltips.
 ---
 
 The viewer turns an `InifDocument` into a single HTML file with no server,
@@ -15,9 +15,14 @@ the `inif view` CLI command.
 - Token-level display: each token is one element with hover tooltips
   showing its id, string, and every extra field present.
 - Annotation highlighting with a color legend per sample. Roles
-  (`system` / `user` / `assistant` / `template`) get stable colors;
-  user-defined annotations are auto-assigned from a 12-color pastel
-  palette.
+  (`system` / `user` / `assistant` / `tool` / `template`) get stable colors;
+  reasoning and tool-call sub-text annotations have their own contrasting
+  palette; user-defined annotations are auto-assigned from a 12-color
+  pastel palette.
+- Per-message panels driven by `Sample.texts` — each message renders its
+  own `value` (with markdown for assistant content), nested children for
+  reasoning / content / tool-call sub-sections, and an eye toggle that
+  filters the token strip to that message's range.
 - Span borders and underline indicators for tokens carrying extras (e.g.
   `logprob`, `logit_lens`, `probe_score`).
 - Newline-aware token wrapping — visual line breaks are inserted after
@@ -25,15 +30,13 @@ the `inif view` CLI command.
 
 ## Three entry points
 
-``` python
-from inif import render_html, save_html, show
-```
+All three are methods on `InifDocument`:
 
-| Function | Returns | Use when |
+| Method | Returns | Use when |
 |---|---|---|
-| `render_html(doc)` | `str` of HTML | You want to embed the markup or post-process it. |
-| `save_html(doc, path)` | `None` (writes file) | You want a file on disk. |
-| `show(doc)` | Jupyter `HTML` object | You're in a notebook. |
+| `doc.render_html()` | `str` of HTML | You want to embed the markup or post-process it. |
+| `doc.save_html(path)` | `None` (writes file) | You want a file on disk. |
+| `doc.show()` | Jupyter `HTML` object | You're in a notebook. |
 
 All three accept the same shaping arguments:
 
@@ -50,22 +53,20 @@ like `traces.inif.json` instead of `inif: gpt2`.
 ## From Jupyter
 
 ``` python
-from inif import load, show
+from inif import InifDocument
 
-doc = load("traces.inif.json")
-show(doc)
+doc = InifDocument.load("traces.inif.json")
+doc.show()
 ```
 
-The page is rendered inline. Use `show(doc, compact=True)` when sharing in
+The page is rendered inline. Use `doc.show(compact=True)` when sharing in
 a notebook export to drop the empty panels.
 
 ## To disk
 
 ``` python
-from inif import save_html
-
-save_html(doc, "traces.html")
-save_html(doc, "traces.html", compact=True, title="Eval results — gpt2")
+doc.save_html("traces.html")
+doc.save_html("traces.html", compact=True, title="Eval results — gpt2")
 ```
 
 The output is fully self-contained — no external CSS or JS. You can open
@@ -93,11 +94,11 @@ Pass `tokenizer` to opt in to auto-detection:
 
 ``` python
 from transformers import AutoTokenizer
-from inif import save_html, load
+from inif import InifDocument
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
-doc = load("traces.inif.json")
-save_html(doc, "traces.html", tokenizer=tokenizer)
+doc = InifDocument.load("traces.inif.json")
+doc.save_html("traces.html", tokenizer=tokenizer)
 ```
 
 The CLI's `view` subcommand does *not* take a tokenizer — line breaks for

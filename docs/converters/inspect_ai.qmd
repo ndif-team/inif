@@ -1,13 +1,14 @@
 ---
 title: Inspect AI Converter
 description: Convert Inspect AI EvalLog objects and .eval files into INIF documents.
-llms-description: from_eval_log / from_eval_file convert Inspect AI eval logs; per-token logprobs and "generated" annotations attach automatically when available.
+llms-description: from_eval_log / from_eval_file convert Inspect AI eval logs; per-token logprobs, "generated", "reasoning", and "tool_call" annotations attach automatically when available.
 ---
 
 Inspect AI is the primary upstream the format was designed around — the
 converter preserves messages, scores, generation config, eval / run ids,
-per-token logprobs, and the model's response region as a `generated`
-annotation.
+per-token logprobs, the model's response region as a `generated`
+annotation, and any reasoning / tool-call sections detected inside the
+chat template.
 
 ``` python
 from inif.converters.inspect_ai import from_eval_log, from_eval_file
@@ -50,9 +51,10 @@ doc = from_eval_log(eval_log, tokenizer="meta-llama/Llama-3.1-8B")
 | `tokenizer` | `"auto"` | See [Tokenizer resolution](tokenizers.qmd). |
 | `include_messages` | `True` | Include per-message text segments on `Sample.texts`. |
 | `deduplicate` | `True` | Run [sequence dedup](../concepts/sequences.qmd). |
-| `min_sequence_length` | `3` | Minimum n-gram length for dedup. |
-| `tag_chat_roles` | `True` | Annotate `system` / `user` / `assistant` / `template`. |
+| `min_sequence_length` | `5` | Minimum n-gram length for dedup. |
+| `tag_chat_roles` | `True` | Annotate `system` / `user` / `assistant` / `tool` / `template`. |
 | `tag_generated` | `True` | Tag the model's response with `"generated"` (last assistant message). |
+| `tag_reasoning` | `True` | Annotate reasoning and tool-call renderings (`"reasoning"`, `"tool_call"`). |
 | `extract_logprobs` | `True` | Attach per-token logprobs when the eval log carries them. |
 
 ## What gets preserved
@@ -62,7 +64,7 @@ doc = from_eval_log(eval_log, tokenizer="meta-llama/Llama-3.1-8B")
 | `Sample` field | Inspect AI source |
 |---|---|
 | `id` | `inspect_sample.id` (coerced to str). |
-| `texts` | Message contents extracted from `inspect_sample.messages`. |
+| `texts` | One `Text` per message extracted from `inspect_sample.messages`, with token offsets and per-section children for assistant turns (reasoning / content / tool_calls). |
 | `tokens` | `tokenizer.apply_chat_template(messages, tokenize=True)`. |
 | `scores` | `inspect_sample.scores` — one `SampleScore` per scorer. |
 | `target` | `str(inspect_sample.target)` if present. |
@@ -84,16 +86,37 @@ doc = from_eval_log(eval_log, tokenizer="meta-llama/Llama-3.1-8B")
 With the defaults, every sample gets:
 
 - **Chat role annotations** (`tag_chat_roles=True`): `user`, `assistant`,
-  `system`, and `template` ranges via character-span matching against the
-  formatted chat template. Best-effort: silently skipped when a
-  tokenizer's per-token decode doesn't round-trip.
+  `system`, `tool`, and `template` ranges via character-span matching
+  against the formatted chat template. Best-effort: silently skipped when
+  a tokenizer's per-token decode doesn't round-trip.
 - **`generated` annotation** (`tag_generated=True`): covers the last
   assistant message — the model's actual response — with
   `metadata={"source": "converter"}`.
+- **`reasoning` / `tool_call` annotations** (`tag_reasoning=True`): for
+  every assistant message that emitted reasoning or tool calls, the chars
+  the chat template rendered for those sections are detected via a
+  render-with-vs-without diff and tagged. Tokens in the diff window pick
+  up both the field's annotation (`reasoning` / `tool_call`) and the
+  message's role (`assistant`), moving out of `template` if
+  `tag_chat_roles` had labelled them there. Fully model-agnostic — the
+  chat template itself decides where each field renders.
 
 The `generated` annotation is added *before* sequence deduplication so the
 response region never collapses into a shared sequence (annotations block
-dedup).
+dedup). Reasoning / tool_call are added *after* dedup, since they only
+need to reflect the final tokenization.
+
+::: {.callout-note appearance="minimal"}
+#### Reasoning routing
+
+`_extract_message_dicts` separates reasoning from `content` and routes it
+through the chat template's native `reasoning_content` slot (passed as
+both `reasoning` and `reasoning_content` keys for templates that pick
+either one). `render_chat_template` always passes `preserve_thinking=True`
+so chat templates that strip reasoning from history (Kimi-style) preserve
+it for analysis. Templates that don't recognise the kwarg silently ignore
+it.
+:::
 
 ## Per-token logprobs
 
@@ -131,11 +154,10 @@ amortized across the whole conversion.
 ### Convert one file
 
 ``` python
-from inif import save
 from inif.converters.inspect_ai import from_eval_file
 
 doc = from_eval_file("logs/run.eval")
-save(doc, "run.inif.json")
+doc.save("run.inif.json")
 ```
 
 ### Override the tokenizer
@@ -158,10 +180,8 @@ Each input writes to its own output file in the same directory.
 ### Filter to failing samples after conversion
 
 ``` python
-from inif import filter_samples_by_score
-
-failures = filter_samples_by_score(
-    doc, scorer="exact_match", predicate=lambda v: v == 0
+failures = doc.filter_samples_by_score(
+    "exact_match", predicate=lambda v: v == 0
 )
 mini_doc = doc.subset(lambda s: s.id in {f.id for f in failures})
 ```

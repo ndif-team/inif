@@ -46,8 +46,8 @@ doc = from_eval_file("logs/my_eval.eval")
 from inif import InifDocument
 
 doc = InifDocument.load("traces.inif.json")
-doc.show()  # in Jupyter
-doc.save_html("traces.html")  # self-contained HTML
+doc.show()                       # in Jupyter
+doc.save_html("traces.html")     # self-contained HTML
 ```
 
 ## CLI
@@ -74,7 +74,7 @@ InifDocument
 └── samples[]         — tokenized generation traces
     ├── tokens[]      — token id + string, plus sparse extras (logprob, logit lens, probes, ...)
     ├── annotations[] — named token ranges with optional metadata
-    ├── texts[]       — named text segments ({name, value, metadata})
+    ├── texts[]       — named text segments ({name, value, start, end, children, metadata})
     ├── spans[]       — named position ranges
     └── scores[]      — evaluation scores (scorer, value, answer)
 ```
@@ -83,7 +83,7 @@ InifDocument
 
 **Annotations**: repeated labels such as chat roles, generated output, reasoning traces, and regex matches live in `Sample.annotations` as named half-open ranges. This avoids repeating `"role": "assistant"` or `"tags": [...]` on every token in a long contiguous region.
 
-**Texts**: `Sample.texts` is a list of `Text` objects (`{name, value, metadata}`). Chat inputs are split per-message with role-based names (`"system_0"`, `"user_0"`, `"assistant_0"`, `"user_1"`, …, system prompt included); plain text inputs use index-based names (`"text_0"`, …).
+**Texts**: `Sample.texts` is a list of `Text` objects (`{name, value, start, end, children, metadata}`). Each entry covers one chat message (with role-based names — `"system_0"`, `"user_0"`, `"assistant_0"`, `"user_1"`, …, system prompt included) or one plain-text input (`"text_0"`, …). Token offsets locate the message inside `tokens`; assistant turns can carry `children` for the reasoning / content / tool-call sub-sections.
 
 **Extensible tokens**: sparse per-token values such as logprobs and interpretability outputs (logit lens, probes, etc.) are stored as token extras.
 
@@ -94,20 +94,21 @@ without inflating token dictionaries.
 
 The same unified read API works on both formats — pass a path with either
 suffix and the reader dispatches to the indexed-archive path or falls back to
-a full `load`:
+a full load:
 
 ```python
 from inif import (
+    InifDocument,
     IndexedInifWriter,
     iter_samples,
     read_info,
     read_samples,
 )
 
-doc.save("traces.inif")                      # indexed archive
-doc.save("traces.inif.json")                 # plain JSON
+doc.save("traces.inif")                                   # indexed archive
+doc.save("traces.inif.json")                              # plain JSON
 
-info = read_info("traces.inif")              # metadata + per-sample summaries
+info = read_info("traces.inif")                           # metadata + per-sample summaries
 sample = read_samples("traces.inif", "sample_42")[0]      # single id
 subset = read_samples("traces.inif", ["sample_1", "sample_7"])
 
@@ -129,7 +130,7 @@ streaming iteration while preserving the same `InifDocument` model.
 
 ### Annotation
 
-All tagging is exposed as methods on `Sample` (single-sample) and `InifDocument` (whole-document fan-out). The two pairs share names so the receiver disambiguates the scope.
+All tagging is exposed as methods on `Sample` (single-sample) and `InifDocument` (whole-document fan-out). The two surfaces share names so the receiver disambiguates the scope.
 
 ```python
 # Annotate every matching token across the whole document
@@ -156,7 +157,7 @@ Common token sequences across samples (e.g. shared system prompts) are automatic
 
 ```python
 deduped = doc.deduplicate_sequences()             # default min_length=5
-flat = deduped.expand_sequences()                 # flatten back
+flat    = deduped.expand_sequences()              # flatten back
 ```
 
 ### Interactive HTML viewer
@@ -164,6 +165,7 @@ flat = deduped.expand_sequences()                 # flatten back
 `InifDocument.save_html` / `InifDocument.show` produce a self-contained HTML page with:
 
 - Collapsible sidebar with sample list and pass/fail indicators
+- Per-message panels driven by `Sample.texts` (with reasoning / content / tool-call sub-sections for assistant turns)
 - Token-level display with hover tooltips showing all extra fields
 - Toggleable annotation highlighting with color legends
 - Span border annotations and extra-field underline indicators

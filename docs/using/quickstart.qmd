@@ -14,7 +14,6 @@ message lists) with a HuggingFace tokenizer and returns an
 [`InifDocument`](../concepts/format.qmd):
 
 ``` python
-from inif import save
 from inif.converters.text import from_texts
 
 doc = from_texts(
@@ -38,8 +37,8 @@ with a single sequence-ref token.
 INIF supports two on-disk formats. The suffix decides which one is used.
 
 ``` python
-save(doc, "capitals.inif.json")     # plain JSON, human-readable
-save(doc, "capitals.inif")          # indexed compressed archive
+doc.save("capitals.inif.json")     # plain JSON, human-readable
+doc.save("capitals.inif")          # indexed compressed archive
 ```
 
 ::: {.callout-tip appearance="minimal"}
@@ -62,10 +61,8 @@ inif view capitals.inif.json
 Or from Python (Jupyter shows it inline):
 
 ``` python
-from inif import show, save_html
-
-show(doc)                                    # Jupyter
-save_html(doc, "capitals.html")              # standalone HTML
+doc.show()                                    # Jupyter
+doc.save_html("capitals.html")                # standalone HTML
 ```
 
 Tokens are rendered with hover tooltips for every extra field, annotations
@@ -73,12 +70,12 @@ are highlighted with a color legend, and the sidebar lists all samples.
 
 ## 4. Load it back
 
-`load` is the symmetric counterpart of `save`:
+`InifDocument.load` is the symmetric counterpart of `save`:
 
 ``` python
-from inif import load
+from inif import InifDocument
 
-doc = load("capitals.inif.json")
+doc = InifDocument.load("capitals.inif.json")
 sample = doc.get_sample("sample_0")
 print(len(sample.tokens))
 ```
@@ -90,7 +87,8 @@ sample without inflating the whole file — see
 ## Where to go next
 
 - [The INIF format](../concepts/format.qmd) — the document model in detail.
-- [Tokens, ids, and extras](../concepts/tokens.qmd) — what a `Token` carries.
+- [Tokens, Texts, and Extras](../concepts/tokens.qmd) — what a `TokenOrSeqRef`
+  carries.
 - [Annotations and tagging](../workflows/tagging.qmd) — labelling token
   ranges with regex, predicates, or chat roles.
 - [Inspect AI conversion](../converters/inspect_ai.qmd) — building INIF from

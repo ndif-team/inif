@@ -170,11 +170,6 @@ def _extract_message_dicts(
     return msg_dicts, reasoning_per_msg
 
 
-# Back-compat aliases — existing test modules import these private names.
-_offset_mapping_decode = offset_mapping_decode
-_messages_to_tokens = messages_to_tokens
-
-
 def _convert_scores(sample: Any) -> list[SampleScore]:
     scores = []
     if not hasattr(sample, "scores") or not sample.scores:

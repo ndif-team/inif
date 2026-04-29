@@ -1,7 +1,7 @@
 ---
 title: Sequences and Deduplication
 description: How INIF detects and shares token runs that repeat across every sample.
-llms-description: Sequence deduplication finds n-grams common to all samples via set-intersection and replaces them with refs; expansion round-trips back to flat tokens.
+llms-description: InifDocument.deduplicate_sequences finds n-grams common to all samples via set-intersection and replaces them with refs; .expand_sequences round-trips back to flat tokens. Default min_length=5.
 ---
 
 A document built from a typical eval has heavy repetition — the same system
@@ -9,13 +9,11 @@ prompt, few-shot exemplars, MCQ scaffolding, or chat template delimiters
 appear at the start of every sample. INIF detects those shared runs and
 stores them once.
 
-The two operations are symmetric:
+The two operations are symmetric methods on `InifDocument`:
 
 ``` python
-from inif import deduplicate_sequences, expand_sequences
-
-compact = deduplicate_sequences(doc, min_length=3)
-flat    = expand_sequences(compact)
+compact = doc.deduplicate_sequences()           # default min_length=5
+flat    = compact.expand_sequences()
 ```
 
 Both return *new* documents — neither mutates the input. Tokens, sequences,
@@ -36,6 +34,18 @@ pass also skips:
 Both the token strings *and* their ids must match for a window to be
 collapsed. This guards against the rare case where two samples share a
 substring but tokenize it to different ids.
+
+::: {.callout-note appearance="minimal"}
+#### Replacements never cross message boundaries
+
+When samples carry chat-style `texts`, the dedup pass injects per-sample
+boundary markers at every `Text.start > 0`. Those markers break contiguity
+in the n-gram intersection so a single replacement run can never span the
+boundary between two messages — a shared `<|im_end|><|im_start|>assistant`
+delimiter that sits at the end of message ``i`` stays attached to that
+message rather than collapsing into a sequence that bridges into message
+``i+1``. Per-text token offsets stay coherent after dedup as a result.
+:::
 
 ## What gets stored
 
@@ -69,31 +79,39 @@ indexes into the model's vocab matrix).
 
 ## Tuning `min_length`
 
-`min_length` (default `3`) is both the smallest window the algorithm will
+`min_length` (default `5`) is both the smallest window the algorithm will
 collapse *and* the n-gram size used for the initial intersection. Smaller
 values find more matches at higher computational cost and produce noisier
 sequence lists; larger values miss small shared runs.
 
-Picking `min_length` is mostly an empirical call:
+Short shared runs aren't worth the indirection in practice — a two- or
+three-token bigram pays the sequence-ref overhead without saving
+meaningful space. Pass an explicit smaller value when you really do need
+to capture them:
 
-- For chat-template-heavy eval documents, the default `3` finds delimiter
-  bigrams plus longer prompt prefixes — usually the right balance.
-- For raw text without chat formatting, raising `min_length` to `5`–`8`
-  avoids collapsing common bigrams that aren't really "shared structure"
-  worth deduplicating.
+``` python
+compact = doc.deduplicate_sequences(min_length=3)
+```
+
+For chat-template-heavy eval documents, the default `5` finds the longer
+template prefixes (system prompt + few-shot exemplars) cleanly. For raw text
+without chat formatting, the same default is conservative and rarely
+surprising.
 
 ## Expansion
 
-`expand_sequences(doc)` rebuilds a flat document. Each ref token is
-replaced by fresh `TokenOrSeqRef(id=t.id, token=t.token)` instances drawn from the
-referenced sequence. The returned document drops the sequence list entirely
-— running `deduplicate_sequences` again will rediscover the same shared
-runs.
+`doc.expand_sequences()` rebuilds a flat document. Each ref token is
+replaced by fresh `TokenOrSeqRef(id=t.id, token=t.token)` instances drawn
+from the referenced sequence. The returned document drops the sequence list
+entirely — running `deduplicate_sequences` again will rediscover the same
+shared runs.
 
 Annotations are remapped along with the tokens: a range `[start, end)`
 spanning a ref token in the compact view becomes the wider range covering
-all of the ref's expanded positions. Round-tripping through dedup → expand
-preserves the labelled regions exactly.
+all of the ref's expanded positions. The `Text.start` / `Text.end` offsets
+on each message also get remapped, so per-message token ranges stay valid
+after dedup → expand. Round-tripping preserves the labelled regions
+exactly.
 
 ## Materializing one position
 

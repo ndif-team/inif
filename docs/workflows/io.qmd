@@ -1,7 +1,7 @@
 ---
 title: Saving and Loading
 description: How to save and load INIF documents — the .inif.json plain format and the .inif indexed archive — and the unified read API that works on both.
-llms-description: Use save/load with .inif.json or .inif (auto-dispatch by suffix); use iter_samples / read_samples / read_info for format-agnostic reads (random access, header reads, streaming).
+llms-description: Use InifDocument.save / .load with .inif.json or .inif (auto-dispatch by suffix); use iter_samples / read_samples / read_info for format-agnostic reads (random access, header reads, streaming).
 ---
 
 INIF supports two on-disk formats. Both produce the *same* `InifDocument`
@@ -13,17 +13,17 @@ read back.
 | Plain JSON | `.inif.json` (`.json`) | Default. Diff-friendly, opens in any editor, easy to inspect. |
 | Indexed archive | `.inif` | Large documents (≥ many MB). Random-access by sample id, header-only reads, streaming writes. |
 
-The single entry point for both is [`save`](../reference/inif.io.qmd) /
-[`load`](../reference/inif.io.qmd), which dispatches based on the file
+The single entry points for both are `InifDocument.save(path)` and the
+`InifDocument.load(path)` classmethod, which dispatch based on the file
 suffix.
 
 ## Plain JSON
 
 ``` python
-from inif import load, save
+from inif import InifDocument
 
-save(doc, "traces.inif.json")
-doc = load("traces.inif.json")
+doc.save("traces.inif.json")
+doc = InifDocument.load("traces.inif.json")
 ```
 
 By default `save` produces a *compact* dump: `None` values and
@@ -32,7 +32,7 @@ serialize down to a single-key `{"token": "<seq_id>"}` dict. Pass
 `compact=False` to keep every field:
 
 ``` python
-save(doc, "traces.inif.json", compact=False)   # full dump
+doc.save("traces.inif.json", compact=False)   # full dump
 ```
 
 ### Pretty-printing
@@ -46,7 +46,7 @@ save(doc, "traces.inif.json", compact=False)   # full dump
   JSON, but harder to read.
 
 ``` python
-save(doc, "compact.inif.json", indent=None)    # one big line
+doc.save("compact.inif.json", indent=None)   # one big line
 ```
 
 ## Indexed archive
@@ -74,10 +74,8 @@ Readers can open the archive, parse the small manifest, and either:
 ### Save and load
 
 ``` python
-from inif import save, load
-
-save(doc, "traces.inif")              # writes the indexed archive
-doc = load("traces.inif")             # full load
+doc.save("traces.inif")                  # writes the indexed archive
+doc = InifDocument.load("traces.inif")   # full load
 ```
 
 `save` and `load` dispatch based on suffix — passing `"traces.inif"` calls
@@ -92,7 +90,7 @@ Three top-level functions in `inif.io` work on **both** `.inif` and
 `.inif.json` files — call them with whichever format your data happens to
 be in, and the dispatcher does the rest. For `.inif`, they hit the indexed
 archive (random access, header-only reads). For `.inif.json`, they fall
-back to a full `load` and operate over the in-memory document.
+back to a full load and operate over the in-memory document.
 
 ### Header-only reads with `read_info`
 
@@ -183,23 +181,19 @@ manifest entry per sample written — so a reader that crashes mid-write can
 still recover the samples that made it to disk. On `close()`, the final
 manifest is written and the journal is no longer needed.
 
-## What's no longer supported
+## Dict round-trips
 
-The following options used to exist and are now removed; the assertions in
-`save`/`load` will tell you so explicitly:
+`to_dict` / `from_dict` are the in-memory equivalents of `save` / `load`,
+useful when you want to ship an INIF document across a process boundary
+(IPC, an RPC payload) without writing to disk:
 
-- `compress=True/False` overrides on `save` / `load`.
-- The `.gz` suffix for gzipped JSON files (`.inif.json.gz`).
-- The `.inifx` extension (early indexed-archive prototype).
-- The earlier indexed-only public readers
-  (`iter_indexed_samples`, `read_indexed_header`, `read_indexed_sample`,
-  `read_indexed_samples`, `read_indexed_sample_summaries`). They are now
-  internal — use [`iter_samples`](#streaming-with-iter_samples),
-  [`read_samples`](#random-access-with-read_samples), and
-  [`read_info`](#header-only-reads-with-read_info) instead.
+``` python
+data = doc.to_dict()                  # JSON-ready dict
+doc  = InifDocument.from_dict(data)   # the inverse
+```
 
-Use `.inif.json` for plain JSON and `.inif` for the indexed archive.
-There is no third option.
+`to_dict` honours the same `compact=True` default — `None` values and
+default-valued fields are stripped.
 
 ## Schema validation
 

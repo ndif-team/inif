@@ -2,12 +2,12 @@
 
 from types import SimpleNamespace
 
+from inif.converters._tokenize import messages_to_tokens
 from inif.converters.inspect_ai import (
     _convert_scores,
     _extract_message_dicts,
     _extract_model_info,
     _extract_source_eval,
-    _messages_to_tokens,
     from_eval_log,
 )
 
@@ -122,7 +122,7 @@ def test_messages_to_tokens_no_tokenizer():
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hello!"},
     ]
-    texts, tokens = _messages_to_tokens(msg_dicts)
+    texts, tokens = messages_to_tokens(msg_dicts)
     assert len(texts) == 2
     assert texts[0].name == "system_0"
     assert texts[0].value == "You are helpful."
@@ -143,10 +143,10 @@ def test_messages_to_tokens_fallback_encode():
             return "x" * len(ids)
 
     msg_dicts = [{"role": "user", "content": "hi"}]
-    texts, tokens = _messages_to_tokens(msg_dicts, tokenizer=FallbackTokenizer())
+    texts, tokens = messages_to_tokens(msg_dicts, tokenizer=FallbackTokenizer())
     assert len(tokens) == 2  # "hi" = 2 chars = 2 tokens
     assert [(t.name, t.value) for t in texts] == [("user_0", "hi")]
-    # No role tagging in _messages_to_tokens anymore
+    # Role tagging is a separate post-dedup step, not done by messages_to_tokens
     for t in tokens:
         assert "role" not in (t.model_extra or {})
 
@@ -177,11 +177,11 @@ def test_messages_to_tokens_with_chat_template():
             return "".join(chr(i) for i in ids)
 
     msg_dicts = [{"role": "user", "content": "hi"}]
-    texts, tokens = _messages_to_tokens(msg_dicts, tokenizer=ChatTokenizer())
+    texts, tokens = messages_to_tokens(msg_dicts, tokenizer=ChatTokenizer())
     # "<s>[user]hi[/user]" = 18 chars = 18 tokens
     assert len(tokens) == 18
     assert [(t.name, t.value) for t in texts] == [("user_0", "hi")]
-    # No role tagging in _messages_to_tokens anymore
+    # Role tagging is a separate post-dedup step, not done by messages_to_tokens
     for t in tokens:
         assert "role" not in (t.model_extra or {})
 

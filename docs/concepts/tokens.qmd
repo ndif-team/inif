@@ -1,7 +1,7 @@
 ---
 title: Tokens, Texts, and Extras
 description: How INIF represents individual tokens, named text segments, and the extras API for sparse per-token data.
-llms-description: TokenOrSeqRef carries vocab tokens (id is int) and sequence refs (id is None, token holds the seq id); Text wraps named text segments; get_extra/set_extra hold per-token logprobs and interpretability outputs.
+llms-description: TokenOrSeqRef carries vocab tokens (id is int) and sequence refs (id is None, token holds the seq id); Text wraps named text segments with token offsets and optional children for assistant sub-sections; get_extra/set_extra hold per-token logprobs and interpretability outputs.
 ---
 
 A `TokenOrSeqRef` is the atomic unit of an INIF sample — a single Pydantic
@@ -64,19 +64,34 @@ those positions are currently compressed inside a shared sequence.
 ## Text segments
 
 `Sample.texts` is a list of `Text` objects (not raw strings). Each `Text`
-has three fields:
+records a named source segment plus the token range that segment renders
+into:
 
 ``` python
 from inif import Text
 
-Text(name="user_0", value="What is 2+2?")
-Text(name="assistant_0", value="The answer is 4.", metadata={"turn_idx": 0})
+Text(name="user_0", value="What is 2+2?",   start=12, end=18)
+Text(name="assistant_0", value="The answer is 4.", start=18, end=27,
+     metadata={"turn_idx": 0})
 ```
 
 - `name: str` — a per-segment label.
 - `value: str` — the segment content.
+- `start: int | None`, `end: int | None` — half-open token offsets covering
+  the tokens that render this text in the chat-template output. For chat
+  messages this captures the content plus any chat-template delimiters
+  assigned to that message; for plain text it covers the whole token
+  stream. Both are `None` when the converter cannot map the text to a
+  token range (e.g. a lossy decode round-trip — best-effort).
+- `children: list[Text]` — optional sub-segments. Used for assistant
+  turns whose body splits into reasoning / content / tool-calls (each
+  becomes one child `Text` with its own value and range). When children
+  are present the parent's own `value` is typically empty and the renderer
+  iterates the children. Each child's range must sit inside the parent's
+  range.
 - `metadata: dict` — free-form caller-supplied context (e.g. turn index,
-  tool-call payload).
+  tool-call payload — the tool-call children carry `{"id", "type", "function"}`
+  here).
 
 The default naming scheme is **role-based** for chat inputs (`"system_0"`,
 `"user_0"`, `"assistant_0"`, `"user_1"`, …, system prompt always included)
@@ -84,6 +99,36 @@ and **index-based** for plain-text inputs (`"text_0"`, `"text_1"`, …). The
 [converters](../converters/index.qmd) emit `Text` objects with these
 defaults; the `name_messages` helper in `inif.converters._tokenize` is the
 shared implementation.
+
+### Children for assistant sub-sections
+
+Assistant turns that issued a tool call or carried a separate reasoning
+trace usually have an empty top-level `value` — the actual payload sits on
+sibling fields the chat template knows how to render. The eval converters
+lift those into `Text.children` so the viewer can show them as labelled
+boxes:
+
+``` python
+Text(
+    name="assistant_3",
+    value="",
+    start=820, end=910,
+    children=[
+        Text(name="reasoning",  value="...", start=820, end=860),
+        Text(name="content",    value="...", start=860, end=895),
+        Text(name="tool_calls", value="",    start=895, end=910,
+             children=[Text(name="search", value='{"q": "..."}',
+                            metadata={"id": "...", "type": "function"})]),
+    ],
+)
+```
+
+Per-child token offsets are filled in by detecting where each structured
+field renders inside the chat template (render-with-vs-without diff for
+`reasoning` and `tool_calls`; the `content` child takes the leftover
+range). When the diff isn't conclusive, children may be present without
+offsets — they still describe the sub-section, just without a token
+attribution.
 
 ## Extras
 
@@ -144,9 +189,6 @@ The same is true for tokens covered by an [annotation](annotations.qmd).
   read naturally as `{"token": "...", "id": N}` for vocab tokens and
   `{"token": "seq_0"}` for sequence refs (with compact mode the default
   `id is None` is stripped).
-- The custom JSON pretty-printer in [`save`](../workflows/io.qmd) renders
+- The custom JSON pretty-printer used by `InifDocument.save` renders
   extras-free token dicts on a single line; tokens with extras render
   multi-line like any other dict.
-- The earlier `sequence_id` field (and its `seq_id` JSON alias) is gone.
-  Documents from before that change need to be re-saved through `load` /
-  `save` to migrate to the new shape.

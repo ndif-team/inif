@@ -10,8 +10,7 @@ from pydantic import BaseModel, Field
 from inif.models import InifDocument, Metadata, Sample
 
 _INDEXED_SUFFIXES = frozenset({".inif"})
-_UNSUPPORTED_COMPRESSED_SUFFIXES = frozenset({".gz"})
-_UNSUPPORTED_INDEXED_SUFFIXES = frozenset({".inifx"})
+_SUPPORTED_JSON_SUFFIXES = frozenset({".json"})
 
 
 def _is_indexed_path(path: Path) -> bool:
@@ -20,16 +19,14 @@ def _is_indexed_path(path: Path) -> bool:
 
 def _assert_json_or_indexed(path: Path, compress: bool | None) -> None:
     assert compress is None, (
-        "`compress` is no longer supported. Use `.inif.json` for plain JSON "
+        "`compress` is not a supported option. Use `.inif.json` for plain JSON "
         "or `.inif` for the indexed compressed archive."
     )
-    assert path.suffix not in _UNSUPPORTED_COMPRESSED_SUFFIXES, (
-        "gzip `.gz` INIF files are no longer supported. Use `.inif.json` for "
-        "plain JSON or `.inif` for the indexed compressed archive."
-    )
-    assert path.suffix not in _UNSUPPORTED_INDEXED_SUFFIXES, (
-        "`.inifx` is no longer supported. Use `.inif` for the indexed "
-        "compressed archive."
+    assert (
+        path.suffix in _INDEXED_SUFFIXES or path.suffix in _SUPPORTED_JSON_SUFFIXES
+    ), (
+        f"Unsupported INIF suffix {path.suffix!r}. Use `.inif.json` for plain "
+        "JSON or `.inif` for the indexed compressed archive."
     )
 
 
@@ -129,9 +126,8 @@ def _save(
 ) -> None:
     """Implementation backing :meth:`InifDocument.save`.
 
-    ``.inif`` paths are written as indexed compressed archives. JSON paths are
-    written as plain JSON. The old gzip ``compress`` override is no longer
-    supported.
+    ``.inif`` paths are written as indexed compressed archives. ``.inif.json``
+    / ``.json`` paths are written as plain JSON.
 
     ``indent`` controls pretty-printing: a positive int uses the custom inif
     formatter (tokens rendered one-per-line with aligned ``"id"`` columns);
@@ -158,8 +154,8 @@ def _save(
 def _load(path: str | Path, compress: bool | None = None) -> InifDocument:
     """Implementation backing :meth:`InifDocument.load`.
 
-    ``.inif`` paths are read as indexed archives. JSON paths are read as plain
-    JSON. The old gzip ``compress`` override is no longer supported.
+    ``.inif`` paths are read as indexed archives. ``.inif.json`` / ``.json``
+    paths are read as plain JSON.
     """
     path = Path(path)
     _assert_json_or_indexed(path, compress)

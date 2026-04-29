@@ -15,9 +15,9 @@ pipeline to write into INIF.
 ## The basic write/read cycle
 
 ``` python
-from inif import load, save
+from inif import InifDocument
 
-doc = load("traces.inif.json")
+doc = InifDocument.load("traces.inif.json")
 
 # Compute and write
 sample = doc.get_sample("sample_0")
@@ -27,7 +27,7 @@ for pos, token in enumerate(sample.tokens):
     score = my_probe(token.id, pos)
     token.set_extra("probe_score", float(score))
 
-save(doc, "traces.with_probe.inif.json")
+doc.save("traces.with_probe.inif.json")
 ```
 
 `set_extra` keeps `__dict__` and `model_extra` in sync, so the value both
@@ -69,9 +69,7 @@ For pipelines that will write to *every* position immediately, expand the
 whole document up front:
 
 ``` python
-from inif import expand_sequences
-
-doc = expand_sequences(doc)
+doc = doc.expand_sequences()
 ```
 
 Then iterate over the flat samples directly. `expand_sequences` returns a
