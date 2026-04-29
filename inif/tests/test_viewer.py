@@ -485,7 +485,9 @@ def test_render_html_annotation_bg_data_attr():
 
 
 def test_render_html_multiple_annotations_listed():
-    """When a token has multiple annotations, all names are exposed."""
+    """When a token has multiple annotations, all names are exposed and the
+    higher-priority one (user-defined > auto sub-text > chat role) drives
+    the background color."""
     doc = InifDocument(
         metadata=Metadata(model=ModelInfo(name="multi_annotation")),
         samples=[
@@ -500,8 +502,38 @@ def test_render_html_multiple_annotations_listed():
         ],
     )
     html = doc.render_html()
-    assert 'data-annotations="user,some_annotation"' in html
-    assert "#d5f5e3" in html
+    assert 'data-annotations="some_annotation,user"' in html
+
+
+def test_render_html_annotation_priority_ordering():
+    """Chat-role tags (assistant/template/...) yield to auto sub-text tags
+    (reasoning/tool_call), which in turn yield to user-defined tags."""
+    doc = InifDocument(
+        metadata=Metadata(model=ModelInfo(name="priority")),
+        samples=[
+            Sample(
+                id="p0",
+                tokens=[
+                    TokenOrSeqRef(id=1, token="a"),
+                    TokenOrSeqRef(id=2, token="b"),
+                    TokenOrSeqRef(id=3, token="c"),
+                ],
+                annotations=[
+                    # Token 0: chat-role only
+                    {"name": "assistant", "ranges": [(0, 3)]},
+                    # Token 1: chat-role + auto sub-text → reasoning wins
+                    {"name": "reasoning", "ranges": [(1, 3)]},
+                    # Token 2: chat-role + auto sub-text + user-defined →
+                    # user-defined wins
+                    {"name": "my_probe", "ranges": [(2, 3)]},
+                ],
+            )
+        ],
+    )
+    html = doc.render_html()
+    assert 'data-annotations="assistant"' in html
+    assert 'data-annotations="reasoning,assistant"' in html
+    assert 'data-annotations="my_probe,reasoning,assistant"' in html
 
 
 # --- Extra field underline tests ---

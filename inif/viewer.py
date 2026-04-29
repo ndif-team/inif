@@ -40,12 +40,24 @@ _SPAN_PALETTE = [
     "#cc9933",
 ]
 
-# Stable colors for common chat-role annotations
+# Stable colors for common chat-role annotations. Kept muted so they read
+# as background / chrome — auto sub-text and user-defined tags overlay
+# higher-priority colors on top.
 _ROLE_ANNOTATION_PALETTE = {
     "system": "#d4e6f1",
     "user": "#d5f5e3",
     "assistant": "#fdebd0",
+    "tool": "#f4ecf7",
     "template": "#eaecee",
+}
+
+# Stable colors for auto sub-text annotations emitted by the converter
+# (reasoning / tool_call). Picked for contrast against the chat-role
+# palette so a token tagged both "assistant" and "reasoning" reads as
+# clearly reasoning, not assistant.
+_AUTO_SUBTEXT_PALETTE = {
+    "reasoning": "#e6ccff",  # light lavender — pops against orange assistant
+    "tool_call": "#b3ffd9",  # light mint — pops against purple tool / orange assistant
 }
 
 # Saturated colors for extra-field underlines
@@ -65,6 +77,8 @@ _EXTRA_SKIP = {"id", "token", "_seq_ref"}
 
 
 def _annotation_color(name: str) -> str:
+    if name in _AUTO_SUBTEXT_PALETTE:
+        return _AUTO_SUBTEXT_PALETTE[name]
     if name in _ROLE_ANNOTATION_PALETTE:
         return _ROLE_ANNOTATION_PALETTE[name]
     return _ANNOTATION_PALETTE[hash(name) % len(_ANNOTATION_PALETTE)]
@@ -498,6 +512,90 @@ def _render_css() -> str:
 .inif-message-tokens {
     padding: 8px 10px;
 }
+/* Per-section panels (reasoning / content / tool calls) inside a message
+   body. The reasoning + tool-calls panels carry a label and a tinted left
+   border so they read as distinct boxes; the plain-content section is
+   unstyled so it looks like the regular message body. */
+.inif-section { margin: 6px 0; }
+.inif-section:first-child { margin-top: 0; }
+.inif-section:last-child { margin-bottom: 0; }
+.inif-section-label {
+    font-size: 0.7em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+}
+.inif-section-label-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 4px;
+}
+.inif-section-label-row .inif-section-label { margin-bottom: 0; }
+.inif-section-meta {
+    font-size: 0.75em;
+    color: #999;
+    margin-bottom: 4px;
+}
+.inif-section-range {
+    font-size: 0.7em;
+    color: #aaa;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+}
+.inif-section-reasoning {
+    background: #fffaf0;
+    border-left: 3px solid #d4a574;
+    padding: 8px 12px;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.92em;
+    color: #5a4628;
+}
+.inif-section-reasoning .inif-section-label { color: #b07a3a; }
+.inif-section-tool-calls {
+    background: #f6f1fb;
+    border-left: 3px solid #9b6bc7;
+    padding: 8px 12px;
+    border-radius: 0 4px 4px 0;
+}
+.inif-section-tool-calls .inif-section-label { color: #6e3fa3; }
+.inif-tool-call {
+    background: #fff;
+    border: 1px solid #e0d6e8;
+    border-radius: 4px;
+    overflow: hidden;
+}
+.inif-tool-call + .inif-tool-call { margin-top: 6px; }
+.inif-tool-call-header {
+    background: #efe4f7;
+    padding: 4px 10px;
+    font-size: 0.85em;
+    color: #4a2a6e;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+.inif-tool-call-name {
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-weight: 600;
+}
+.inif-tool-call-id {
+    font-size: 0.85em;
+    color: #8a6db0;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+}
+.inif-tool-call-args {
+    margin: 0;
+    padding: 8px 10px;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 0.8em;
+    background: #fafafa;
+    color: #333;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+}
 .inif-texts-panel .inif-text-item {
     margin: 4px 0;
     padding: 6px 10px;
@@ -588,16 +686,18 @@ def _render_js() -> str:
         btn.textContent = c ? '›' : '‹';
     });
 
-    /* Per-message eye toggle: switch between markdown and tokens. */
+    /* Per-message eye toggle: switch between markdown and tokens. The text
+       wrapper holds every section (reasoning / content / tool calls) so a
+       single toggle hides them all together. */
     document.addEventListener('click', function(e) {
         var btn = e.target.closest('.inif-message-toggle');
         if (!btn) return;
         var msg = btn.closest('.inif-message');
         if (!msg) return;
-        var md = msg.querySelector('.inif-message-md');
+        var text = msg.querySelector('.inif-message-text');
         var toks = msg.querySelector('.inif-message-tokens');
         var showingTokens = btn.classList.toggle('active');
-        if (md) md.hidden = showingTokens;
+        if (text) text.hidden = showingTokens;
         if (toks) toks.hidden = !showingTokens;
         btn.setAttribute('title', showingTokens ? 'Show text' : 'Show tokens');
     });
@@ -948,7 +1048,34 @@ def _collect_active_annotations(sample_data: dict) -> dict[str, str]:
     return annotations
 
 
+# Annotation precedence for token highlighting. Lower-priority groups sit
+# behind higher-priority ones, so a token tagged both ``assistant`` and
+# ``reasoning`` paints with the reasoning color (and any user-defined tag
+# wins over both). Within a group, the first-encountered annotation wins.
+_CHAT_ROLE_ANNOTATIONS = frozenset({"system", "user", "assistant", "tool", "template"})
+_AUTO_SUBTEXT_ANNOTATIONS = frozenset({"reasoning", "tool_call"})
+
+
+def _annotation_priority(name: str) -> int:
+    """Return 0 (chat-template role) / 1 (auto sub-text) / 2 (user-defined).
+
+    Higher values render in front of lower values, so the highest-priority
+    annotation drives a token's background color.
+    """
+    if name in _CHAT_ROLE_ANNOTATIONS:
+        return 0
+    if name in _AUTO_SUBTEXT_ANNOTATIONS:
+        return 1
+    return 2
+
+
 def _token_annotation_names(sample_data: dict) -> dict[int, list[str]]:
+    """Return ``pos → annotation_names`` ordered by display priority.
+
+    Highest-priority annotations come FIRST so callers that pick
+    ``annotations[0]`` (token background, tooltip lead) automatically use
+    the most informative tag for the position.
+    """
     by_pos: dict[int, list[str]] = {}
     for annotation in sample_data.get("annotations", []):
         name = annotation.get("name")
@@ -957,6 +1084,11 @@ def _token_annotation_names(sample_data: dict) -> dict[int, list[str]]:
         for start, end in annotation.get("ranges", []):
             for pos in range(start, end):
                 by_pos.setdefault(pos, []).append(name)
+    for pos, names in by_pos.items():
+        # Stable sort by descending priority — preserves source order for
+        # ties (two user-defined tags on the same token keep the order they
+        # were declared in).
+        by_pos[pos] = sorted(names, key=lambda n: -_annotation_priority(n))
     return by_pos
 
 
@@ -1282,6 +1414,133 @@ def _texts_with_offsets(sample_data: dict) -> list[dict]:
     return out
 
 
+def _render_markdown_section(raw_value: str) -> str:
+    """Wrap raw markdown source in the `.inif-message-md` shell the JS
+    renderer scans on load. Each shell is independently collapsible."""
+    return (
+        '<div class="inif-message-md">'
+        f'<pre class="inif-message-md-source">{html.escape(raw_value)}</pre>'
+        '<div class="inif-message-md-rendered"></div>'
+        "</div>"
+    )
+
+
+def _format_tool_call_args(value: str) -> str:
+    """Pretty-print a tool-call arguments JSON string.
+
+    The converter stores ``arguments`` as a JSON-encoded string on each
+    tool-call child; re-parsing for indentation gives a readable block.
+    Falls back to the raw string when parsing fails (e.g. a non-JSON
+    payload).
+    """
+    if not value:
+        return ""
+    try:
+        parsed = json.loads(value)
+    except (ValueError, TypeError):
+        return value
+    return json.dumps(parsed, indent=2, ensure_ascii=False)
+
+
+def _render_tool_call_child(child: dict) -> str:
+    """Render one tool-call child as a name header + args code block."""
+    name = child.get("name") or "(unnamed)"
+    md = child.get("metadata") or {}
+    call_id = md.get("id") or ""
+    args = _format_tool_call_args(child.get("value") or "")
+    parts = ['<div class="inif-tool-call">']
+    parts.append('<div class="inif-tool-call-header">')
+    parts.append(f'<span class="inif-tool-call-name">{html.escape(str(name))}</span>')
+    if call_id:
+        parts.append(
+            f'<span class="inif-tool-call-id">{html.escape(str(call_id))}</span>'
+        )
+    parts.append("</div>")
+    parts.append(f'<pre class="inif-tool-call-args">{html.escape(args)}</pre>')
+    parts.append("</div>")
+    return "".join(parts)
+
+
+_SECTION_LABELS = {
+    "reasoning": "Reasoning",
+    "tool_calls": "Tool calls",
+}
+
+
+def _section_range_badge(child: dict) -> str:
+    start = child.get("start")
+    end = child.get("end")
+    if start is None or end is None:
+        return ""
+    return (
+        f'<span class="inif-section-range">[{int(start)}, {int(end)}) · '
+        f"{int(end) - int(start)} tokens</span>"
+    )
+
+
+def _render_child_section(child: dict) -> str:
+    """Render one direct child of a message Text as a labeled section.
+
+    The child's ``name`` selects the visual treatment: ``reasoning`` and
+    ``tool_calls`` get their own tinted box with a header label and a
+    per-section token range badge; ``content`` is rendered as a bare
+    markdown body so it reads as the "main" message text. Anything else
+    falls back to a generic markdown block labeled with the child's name.
+    """
+    name = child.get("name", "")
+    range_badge = _section_range_badge(child)
+    if name == "content":
+        body = _render_markdown_section(child.get("value") or "")
+        if range_badge:
+            return (
+                '<div class="inif-section inif-section-content">'
+                f'<div class="inif-section-meta">{range_badge}</div>'
+                f"{body}</div>"
+            )
+        return f'<div class="inif-section inif-section-content">{body}</div>'
+    if name == "tool_calls":
+        parts = ['<div class="inif-section inif-section-tool-calls">']
+        parts.append('<div class="inif-section-label-row">')
+        parts.append('<div class="inif-section-label">Tool calls</div>')
+        if range_badge:
+            parts.append(range_badge)
+        parts.append("</div>")
+        for call in child.get("children") or []:
+            parts.append(_render_tool_call_child(call))
+        parts.append("</div>")
+        return "".join(parts)
+    label = _SECTION_LABELS.get(name, name)
+    css_class = (
+        "inif-section-reasoning" if name == "reasoning" else "inif-section-generic"
+    )
+    parts = [f'<div class="inif-section {css_class}">']
+    parts.append('<div class="inif-section-label-row">')
+    parts.append(f'<div class="inif-section-label">{html.escape(str(label))}</div>')
+    if range_badge:
+        parts.append(range_badge)
+    parts.append("</div>")
+    parts.append(_render_markdown_section(child.get("value") or ""))
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _render_message_text_sections(text: dict) -> str:
+    """Render the text-mode body of one message.
+
+    With nested children: emit one labeled section per child (reasoning,
+    content, tool calls). Without children: render the message's own
+    ``value`` as a single markdown block. When everything is empty,
+    render a ``(empty)`` placeholder.
+    """
+    children = text.get("children") or []
+    if children:
+        return "".join(_render_child_section(c) for c in children)
+    raw_value = text.get("value") or ""
+    if not raw_value:
+        return '<span class="inif-message-empty">(empty)</span>'
+    return _render_markdown_section(raw_value)
+
+
 def _render_messages_panel(
     sample_data: dict,
     sequences: list[dict],
@@ -1291,11 +1550,11 @@ def _render_messages_panel(
     """Render the per-message panels with markdown body + token toggle.
 
     Each Text with ``start`` / ``end`` becomes one collapsible message
-    panel: by default it shows the message content rendered as markdown,
-    and clicking the eye toggle swaps the body for the token strip
-    covering ``[start, end)`` of ``sample.tokens``. Returns ``""`` when
-    there are no offsetted texts (caller falls back to a full token
-    strip).
+    panel: by default it shows reasoning / content / tool calls as
+    distinct sections, and clicking the eye toggle swaps the whole text
+    wrapper for the token strip covering ``[start, end)`` of
+    ``sample.tokens``. Returns ``""`` when there are no offsetted texts
+    (caller falls back to a full token strip).
     """
     texts = _texts_with_offsets(sample_data)
     if not texts:
@@ -1311,10 +1570,6 @@ def _render_messages_panel(
         meta_html = (
             f'<span class="inif-message-meta">[{start}, {end}) · {n} tokens</span>'
         )
-        # The raw markdown lives in a hidden ``<pre>`` so the JS markdown
-        # renderer can read ``textContent`` (already entity-decoded by the
-        # browser) without us having to round-trip through a data attribute.
-        raw_value = text.get("value") or ""
         parts.append(
             f'<div class="inif-message"{role_attr} '
             f'data-text-name="{html.escape(name, quote=True)}" '
@@ -1328,12 +1583,9 @@ def _render_messages_panel(
             'title="Show tokens">▦</button>'
         )
         parts.append("</div>")
-        # Markdown body (default).
-        parts.append('<div class="inif-message-body inif-message-md">')
-        parts.append(
-            f'<pre class="inif-message-md-source">{html.escape(raw_value)}</pre>'
-        )
-        parts.append('<div class="inif-message-md-rendered"></div>')
+        # Text body (default): reasoning / content / tool-calls sections.
+        parts.append('<div class="inif-message-body inif-message-text">')
+        parts.append(_render_message_text_sections(text))
         parts.append("</div>")
         # Tokens body (hidden until toggle).
         parts.append('<div class="inif-message-body inif-message-tokens" hidden>')

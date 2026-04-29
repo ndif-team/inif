@@ -7,8 +7,9 @@ dicts and a HuggingFace tokenizer.
 
 from __future__ import annotations
 
+import json
 import warnings
-from typing import Any
+from typing import Any, Callable
 
 from inif.converters._decode import (
     ByteSliceDecoder,
@@ -42,13 +43,63 @@ def render_chat_template(
     )
 
 
-def name_messages(messages: list[dict[str, str]]) -> list[Text]:
+def _build_message_children(
+    reasoning: str | None,
+    content: str,
+    tool_calls: list[dict] | None,
+) -> list[Text]:
+    """Build the per-section sub-Texts for an assistant message.
+
+    Returns ``[]`` when the message has only plain content (no reasoning,
+    no tool calls) — in that case the parent ``Text.value`` carries the
+    content directly. Otherwise emits one child per non-empty section so
+    the viewer can render them as labeled boxes.
+    """
+    if not reasoning and not tool_calls:
+        return []
+    children: list[Text] = []
+    if reasoning:
+        children.append(Text(name="reasoning", value=reasoning))
+    if content:
+        children.append(Text(name="content", value=content))
+    if tool_calls:
+        call_children: list[Text] = []
+        for call in tool_calls:
+            fn = call.get("function") or {}
+            fn_name = fn.get("name") or call.get("name") or "tool_call"
+            args = fn.get("arguments") if "function" in call else call.get("arguments")
+            if args is None:
+                args = {}
+            value = (
+                args
+                if isinstance(args, str)
+                else json.dumps(args, ensure_ascii=False, default=str)
+            )
+            md: dict[str, Any] = {}
+            if "id" in call:
+                md["id"] = call["id"]
+            if "type" in call:
+                md["type"] = call["type"]
+            call_children.append(Text(name=fn_name, value=value, metadata=md))
+        children.append(Text(name="tool_calls", value="", children=call_children))
+    return children
+
+
+def name_messages(messages: list[dict[str, Any]]) -> list[Text]:
     """Convert chat message dicts into role-named :class:`Text` segments.
 
     Each message becomes one ``Text`` whose ``name`` is its role suffixed
     with a per-role index (``"system_0"``, ``"user_0"``, ``"assistant_0"``,
     ``"user_1"``, …) and whose ``value`` is the message content. The
     system prompt, when present, is included.
+
+    Assistant turns that issued a tool call (or pure reasoning) typically
+    have ``content == ""`` — the actual payload sits on sibling fields. To
+    keep that information visible, those sub-sections are lifted into
+    :attr:`Text.children` (one child per ``reasoning`` / ``content`` /
+    ``tool_calls`` block) and the parent's own ``value`` is left empty.
+    Per-child token offsets are filled in later by
+    :func:`_populate_text_offsets`.
     """
     counters: dict[str, int] = {}
     out: list[Text] = []
@@ -56,7 +107,15 @@ def name_messages(messages: list[dict[str, str]]) -> list[Text]:
         role = msg.get("role") or "text"
         idx = counters.get(role, 0)
         counters[role] = idx + 1
-        out.append(Text(name=f"{role}_{idx}", value=msg.get("content", "")))
+        reasoning = msg.get("reasoning") or msg.get("reasoning_content") or None
+        raw_tool_calls = msg.get("tool_calls")
+        tool_calls = list(raw_tool_calls) if raw_tool_calls else None
+        content = msg.get("content", "") or ""
+        children = _build_message_children(reasoning, content, tool_calls)
+        # When sub-sections are lifted into children the parent's value is
+        # cleared so the viewer doesn't render content twice.
+        parent_value = "" if children else content
+        out.append(Text(name=f"{role}_{idx}", value=parent_value, children=children))
     return out
 
 
@@ -217,14 +276,106 @@ def compute_message_token_ranges(
     return list(zip(boundaries[:-1], boundaries[1:]))
 
 
+def _field_char_spans(
+    msg_dicts: list[dict[str, Any]],
+    tokenizer: Any,
+    formatted: str,
+) -> dict[str, dict[int, tuple[int, int]]]:
+    """For each field in :data:`_FIELD_ANNOTATIONS`, return a
+    ``msg_idx → (char_start, char_end)`` map covering its rendered span in
+    ``formatted``.
+
+    The detection strategy mirrors :func:`tag_template_field_renderings`:
+    render the chat template once with the field stripped from EVERY
+    message and use :func:`_multi_diff_chunks` to find all missing
+    regions. Each chunk is attributed to its source message by order.
+    Falls back to per-message rendering when the chunk count doesn't
+    match.
+    """
+    out: dict[str, dict[int, tuple[int, int]]] = {}
+    for field_name in _FIELD_ANNOTATIONS:
+        msgs_with_field = [
+            (idx, msg) for idx, msg in enumerate(msg_dicts) if msg.get(field_name)
+        ]
+        if not msgs_with_field:
+            continue
+        batched_variant = [
+            _strip_field(m, field_name) if m.get(field_name) else m for m in msg_dicts
+        ]
+        try:
+            formatted_batched = render_chat_template(tokenizer, batched_variant)
+        except (TypeError, KeyError, ValueError):
+            continue
+        chunks = _multi_diff_chunks(formatted, formatted_batched)
+        if len(chunks) == len(msgs_with_field):
+            spans_by_msg: list[tuple[int, int] | None] = list(chunks)
+        else:
+            spans_by_msg = []
+            for msg_idx, msg in msgs_with_field:
+                variant = list(msg_dicts)
+                variant[msg_idx] = _strip_field(msg, field_name)
+                try:
+                    formatted_one = render_chat_template(tokenizer, variant)
+                except (TypeError, KeyError, ValueError):
+                    spans_by_msg.append(None)
+                    continue
+                spans_by_msg.append(_diff_span(formatted, formatted_one))
+        field_map: dict[int, tuple[int, int]] = {}
+        for (msg_idx, _msg), span in zip(msgs_with_field, spans_by_msg):
+            if span is not None:
+                field_map[msg_idx] = span
+        if field_map:
+            out[field_name] = field_map
+    return out
+
+
+def _populate_child_offsets(
+    text: Text,
+    msg_field_spans: dict[str, tuple[int, int]],
+    char_to_token: Callable[[int], int],
+) -> None:
+    """Assign ``start`` / ``end`` to a message Text's children from its field
+    char spans.
+
+    ``reasoning`` and ``tool_calls`` children get their token range directly
+    from the diff-derived spans; the ``content`` child takes the leftover
+    range between them inside the parent's span (or the whole parent span
+    when there are no other sub-blocks to displace it).
+    """
+    if not text.children or text.start is None or text.end is None:
+        return
+    msg_start, msg_end = text.start, text.end
+    child_ranges: dict[str, tuple[int, int]] = {}
+    for field_name, span in msg_field_spans.items():
+        cs, ce = span
+        ts = max(char_to_token(cs), msg_start)
+        te = min(char_to_token(ce), msg_end)
+        if ts < te:
+            child_ranges[field_name] = (ts, te)
+
+    reasoning_range = child_ranges.get("reasoning")
+    tool_calls_range = child_ranges.get("tool_calls")
+
+    for child in text.children:
+        if child.name == "reasoning" and reasoning_range is not None:
+            child.start, child.end = reasoning_range
+        elif child.name == "tool_calls" and tool_calls_range is not None:
+            child.start, child.end = tool_calls_range
+        elif child.name == "content":
+            cs = reasoning_range[1] if reasoning_range else msg_start
+            ce = tool_calls_range[0] if tool_calls_range else msg_end
+            if cs < ce:
+                child.start, child.end = cs, ce
+
+
 def _populate_text_offsets(
     texts: list[Text],
     messages: list[dict[str, Any]],
     tokens: list[TokenOrSeqRef],
     tokenizer: Any,
 ) -> None:
-    """Set ``start`` / ``end`` on each :class:`Text` from the message-token
-    partition, when one can be computed."""
+    """Set ``start`` / ``end`` on each :class:`Text` (and its children) from
+    the message-token partition, when one can be computed."""
     if not texts or len(texts) != len(messages):
         return
     if not tokens or not hasattr(tokenizer, "apply_chat_template"):
@@ -243,6 +394,37 @@ def _populate_text_offsets(
         if rng is None:
             continue
         text.start, text.end = rng
+
+    needs_children = any(text.children for text in texts)
+    if not needs_children:
+        return
+
+    decoded = [t.token or "" for t in tokens]
+    if "".join(decoded) != formatted:
+        return
+    n_tokens = len(tokens)
+    token_starts: list[int] = []
+    pos = 0
+    for s in decoded:
+        token_starts.append(pos)
+        pos += len(s)
+
+    def char_to_token(char_pos: int) -> int:
+        return next(
+            (j for j in range(n_tokens) if token_starts[j] >= char_pos),
+            n_tokens,
+        )
+
+    field_spans = _field_char_spans(messages, tokenizer, formatted)
+    for msg_idx, text in enumerate(texts):
+        if not text.children:
+            continue
+        msg_field_spans = {
+            field_name: spans[msg_idx]
+            for field_name, spans in field_spans.items()
+            if msg_idx in spans
+        }
+        _populate_child_offsets(text, msg_field_spans, char_to_token)
 
 
 def offset_mapping_decode(

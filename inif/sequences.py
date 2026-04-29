@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from inif.models import InifDocument, Sample, Sequence, TokenOrSeqRef
+from inif.models import InifDocument, Sample, Sequence, Text, TokenOrSeqRef
 
 
 def _ngram_positions(tokens: list[str], n: int) -> dict[tuple[str, ...], list[int]]:
@@ -294,25 +294,40 @@ def _remap_sample_positions(
     if not old_to_new:
         return
     new_n = old_to_new[-1][1]
+
+    def _remap_range(start: int, end: int) -> tuple[int, int]:
+        if start < len(old_to_new):
+            new_start = old_to_new[start][0]
+        else:
+            new_start = new_n
+        if end == 0:
+            new_end = 0
+        elif end - 1 < len(old_to_new):
+            new_end = old_to_new[end - 1][1]
+        else:
+            new_end = new_n
+        return new_start, new_end
+
+    def _remap_children(parent: Text) -> None:
+        for child in parent.children:
+            if child.start is not None and child.end is not None:
+                cs, ce = _remap_range(child.start, child.end)
+                child.start = cs
+                child.end = max(ce, cs)
+            if child.children:
+                _remap_children(child)
+
     prev_end = 0
     for text in sample.texts:
         if text.start is None or text.end is None:
             continue
-        if text.start < len(old_to_new):
-            new_start = old_to_new[text.start][0]
-        else:
-            new_start = new_n
-        if text.end == 0:
-            new_end = 0
-        elif text.end - 1 < len(old_to_new):
-            new_end = old_to_new[text.end - 1][1]
-        else:
-            new_end = new_n
+        new_start, new_end = _remap_range(text.start, text.end)
         new_start = max(new_start, prev_end)
         new_end = max(new_end, new_start)
         text.start = new_start
         text.end = new_end
         prev_end = new_end
+        _remap_children(text)
 
 
 def _deduplicate_sequences(

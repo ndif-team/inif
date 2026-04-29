@@ -30,26 +30,48 @@ class Text(BaseModel):
     whole token stream. They are ``None`` when the converter cannot map
     the text to a token range (e.g. lossy decode round-trip).
 
+    ``children`` lets a message carry sub-segments — used for assistant
+    turns whose body splits into reasoning / content / tool-calls (each
+    becomes one child :class:`Text` with its own ``value``, ``start`` /
+    ``end``, and ``metadata``). When children are present the parent's
+    own ``value`` is typically empty and the renderer iterates the
+    children. Each child's range must sit inside the parent's range.
+
     ``metadata`` is a free-form dict for caller-supplied context (e.g.
-    turn index, tool-call payload).
+    turn index, tool-call payload — the tool-call children carry
+    ``{"id", "type", "function"}`` here).
     """
 
     name: str
-    value: str
+    value: str = ""
     start: int | None = None
     end: int | None = None
+    children: list[Text] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_offsets(self) -> Text:
-        if self.start is None and self.end is None:
-            return self
-        assert self.start is not None and self.end is not None, (
-            f"Text {self.name!r} must set both start and end or neither"
-        )
-        assert 0 <= self.start <= self.end, (
-            f"Text {self.name!r} has invalid range [{self.start}, {self.end})"
-        )
+        if self.start is not None or self.end is not None:
+            assert self.start is not None and self.end is not None, (
+                f"Text {self.name!r} must set both start and end or neither"
+            )
+            assert 0 <= self.start <= self.end, (
+                f"Text {self.name!r} has invalid range [{self.start}, {self.end})"
+            )
+        for child in self.children:
+            cs, ce = child.start, child.end
+            if cs is None and ce is None:
+                continue
+            assert cs is not None and ce is not None, (
+                f"Text child {child.name!r} of {self.name!r} must set both "
+                "start and end or neither"
+            )
+            if self.start is not None and self.end is not None:
+                assert self.start <= cs and ce <= self.end, (
+                    f"Text child {child.name!r} range [{cs}, {ce}) sits "
+                    f"outside parent {self.name!r} range "
+                    f"[{self.start}, {self.end})"
+                )
         return self
 
 
@@ -365,16 +387,25 @@ class Sample(BaseModel):
                 else:
                     adjusted.append((start, end + delta))
             annotation.ranges = _merge_ranges(adjusted)
-        for text in self.texts:
+
+        def _shift_text(text: Text) -> None:
             if text.start is None or text.end is None:
-                continue
+                return
             if text.end <= index:
-                continue
+                return
             if text.start > index:
                 text.start += delta
                 text.end += delta
             else:
                 text.end += delta
+
+        def _shift_text_tree(text: Text) -> None:
+            _shift_text(text)
+            for child in text.children:
+                _shift_text_tree(child)
+
+        for text in self.texts:
+            _shift_text_tree(text)
 
     def get_expanded_tokens(self, sequences: list[Sequence]) -> list[TokenOrSeqRef]:
         # Build the sequence map once per call instead of rebuilding it inside

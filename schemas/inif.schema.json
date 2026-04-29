@@ -493,13 +493,14 @@
       "type": "object"
     },
     "Text": {
-      "description": "A named text segment on a :class:`Sample`.\n\nA sample's ``texts`` list carries one entry per source segment \u2014 for\nchat inputs that's one per message (including the system prompt); for\nplain-text inputs it's one per input string. The default naming scheme\nis role-based for chat (``\"system_0\"``, ``\"user_0\"``, ``\"assistant_0\"``,\n``\"user_1\"``, \u2026) and index-based for plain text (``\"text_0\"``,\n``\"text_1\"``, \u2026).\n\n``start`` and ``end`` are half-open token offsets covering the tokens\nthat render this text in the chat-template output (``[start, end)``):\nfor chat messages this captures the content plus any chat-template\ndelimiters assigned to that message; for plain text it covers the\nwhole token stream. They are ``None`` when the converter cannot map\nthe text to a token range (e.g. lossy decode round-trip).\n\n``metadata`` is a free-form dict for caller-supplied context (e.g.\nturn index, tool-call payload).",
+      "description": "A named text segment on a :class:`Sample`.\n\nA sample's ``texts`` list carries one entry per source segment \u2014 for\nchat inputs that's one per message (including the system prompt); for\nplain-text inputs it's one per input string. The default naming scheme\nis role-based for chat (``\"system_0\"``, ``\"user_0\"``, ``\"assistant_0\"``,\n``\"user_1\"``, \u2026) and index-based for plain text (``\"text_0\"``,\n``\"text_1\"``, \u2026).\n\n``start`` and ``end`` are half-open token offsets covering the tokens\nthat render this text in the chat-template output (``[start, end)``):\nfor chat messages this captures the content plus any chat-template\ndelimiters assigned to that message; for plain text it covers the\nwhole token stream. They are ``None`` when the converter cannot map\nthe text to a token range (e.g. lossy decode round-trip).\n\n``children`` lets a message carry sub-segments \u2014 used for assistant\nturns whose body splits into reasoning / content / tool-calls (each\nbecomes one child :class:`Text` with its own ``value``, ``start`` /\n``end``, and ``metadata``). When children are present the parent's\nown ``value`` is typically empty and the renderer iterates the\nchildren. Each child's range must sit inside the parent's range.\n\n``metadata`` is a free-form dict for caller-supplied context (e.g.\nturn index, tool-call payload \u2014 the tool-call children carry\n``{\"id\", \"type\", \"function\"}`` here).",
       "properties": {
         "name": {
           "title": "Name",
           "type": "string"
         },
         "value": {
+          "default": "",
           "title": "Value",
           "type": "string"
         },
@@ -527,6 +528,13 @@
           "default": null,
           "title": "End"
         },
+        "children": {
+          "items": {
+            "$ref": "#/$defs/Text"
+          },
+          "title": "Children",
+          "type": "array"
+        },
         "metadata": {
           "additionalProperties": true,
           "title": "Metadata",
@@ -534,8 +542,7 @@
         }
       },
       "required": [
-        "name",
-        "value"
+        "name"
       ],
       "title": "Text",
       "type": "object"
