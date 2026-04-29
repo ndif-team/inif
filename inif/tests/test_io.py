@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from inif.io import from_dict, load, save, to_dict
 from inif.models import (
     InifDocument,
     Metadata,
@@ -13,7 +12,7 @@ from inif.models import (
 
 
 def test_to_dict_compact(doc):
-    d = to_dict(doc, compact=True)
+    d = doc.to_dict(compact=True)
     # None values should be stripped
     assert "revision" not in d["metadata"]["model"]
     # Empty dicts should be stripped
@@ -23,14 +22,14 @@ def test_to_dict_compact(doc):
 
 
 def test_to_dict_not_compact(doc):
-    d = to_dict(doc, compact=False)
+    d = doc.to_dict(compact=False)
     assert "revision" in d["metadata"]["model"]
     assert d["metadata"]["model"]["revision"] is None
 
 
 def test_roundtrip_dict(doc):
-    d = to_dict(doc, compact=False)
-    doc2 = from_dict(d)
+    d = doc.to_dict(compact=False)
+    doc2 = InifDocument.from_dict(d)
 
     assert doc2.metadata.model.name == doc.metadata.model.name
     assert doc2.metadata.inif_version == doc.metadata.inif_version
@@ -46,8 +45,8 @@ def test_roundtrip_dict(doc):
 
 
 def test_roundtrip_dict_compact(doc):
-    d = to_dict(doc, compact=True)
-    doc2 = from_dict(d)
+    d = doc.to_dict(compact=True)
+    doc2 = InifDocument.from_dict(d)
     # Compact strips None/empty, but from_dict fills defaults
     assert doc2.metadata.model.name == "gpt2"
     assert doc2.metadata.model.loading_config == {}
@@ -57,8 +56,8 @@ def test_roundtrip_dict_compact(doc):
 def test_save_load_json(doc):
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.inif.json"
-        save(doc, path)
-        doc2 = load(path)
+        doc.save(path)
+        doc2 = InifDocument.load(path)
 
         assert doc2.metadata.model.name == "gpt2"
         assert len(doc2.samples) == 1
@@ -68,8 +67,8 @@ def test_save_load_json(doc):
 def test_save_load_inif_indexed_archive(doc):
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.inif"
-        save(doc, path)
-        doc2 = load(path)
+        doc.save(path)
+        doc2 = InifDocument.load(path)
 
         assert doc2.metadata.model.name == "gpt2"
         assert len(doc2.samples) == 1
@@ -79,7 +78,7 @@ def test_save_rejects_compress_override(doc):
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.inif.json"
         with pytest.raises(AssertionError, match="compress"):
-            save(doc, path, compress=True)
+            doc.save(path, compress=True)
 
 
 def test_save_load_preserves_extra_fields():
@@ -96,8 +95,8 @@ def test_save_load_preserves_extra_fields():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.inif.json"
-        save(doc, path, compact=False)
-        doc2 = load(path)
+        doc.save(path, compact=False)
+        doc2 = InifDocument.load(path)
 
         t = doc2.samples[0].tokens[0]
         assert t.get_extra("source") == "user"
@@ -110,8 +109,8 @@ def test_sequence_ids_survive_save_load(doc):
     would corrupt every expanded token's vocabulary id."""
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.inif.json"
-        save(doc, path)
-        doc2 = load(path)
+        doc.save(path)
+        doc2 = InifDocument.load(path)
 
     for s_orig, s_reload in zip(doc.sequences, doc2.sequences):
         assert [t.id for t in s_reload.tokens] == [t.id for t in s_orig.tokens]
@@ -121,9 +120,9 @@ def test_sequence_ids_survive_save_load(doc):
 def test_load_rejects_compress_override(doc):
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.inif.json"
-        save(doc, path)
+        doc.save(path)
         with pytest.raises(AssertionError, match="compress"):
-            load(path, compress=False)
+            InifDocument.load(path, compress=False)
 
 
 def test_gzip_suffix_is_rejected(doc):
@@ -131,22 +130,22 @@ def test_gzip_suffix_is_rejected(doc):
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.json.gz"
         with pytest.raises(AssertionError, match="gzip"):
-            save(doc, path)
+            doc.save(path)
 
 
 def test_inifx_suffix_is_rejected(doc):
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "test.inifx"
         with pytest.raises(AssertionError, match="inifx"):
-            save(doc, path)
+            doc.save(path)
         with pytest.raises(AssertionError, match="inifx"):
-            load(path)
+            InifDocument.load(path)
 
 
 def test_minimal_document():
     doc = InifDocument(metadata=Metadata(model=ModelInfo(name="test")))
-    d = to_dict(doc, compact=True)
-    doc2 = from_dict(d)
+    d = doc.to_dict(compact=True)
+    doc2 = InifDocument.from_dict(d)
     assert doc2.metadata.model.name == "test"
     assert doc2.samples == []
     assert doc2.sequences == []

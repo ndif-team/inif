@@ -203,9 +203,7 @@ class FlatTokenStore(BaseModel):
     def positions(self, annotation_name: str) -> list[int]:
         return list(self.annotations.get(annotation_name, []))
 
-    def tokens(
-        self, annotation_name: str
-    ) -> list[tuple[int, int | None, str | None]]:
+    def tokens(self, annotation_name: str) -> list[tuple[int, int | None, str | None]]:
         return [
             (pos, self.token_ids[pos], self.token_texts[pos])
             for pos in self.annotations.get(annotation_name, [])

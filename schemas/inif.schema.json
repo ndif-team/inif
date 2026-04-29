@@ -125,16 +125,23 @@
         },
         "tokens": {
           "items": {
-            "$ref": "#/$defs/Token"
+            "$ref": "#/$defs/TokenOrSeqRef"
           },
           "title": "Tokens",
           "type": "array"
         },
         "texts": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/Text"
           },
           "title": "Texts",
+          "type": "array"
+        },
+        "annotations": {
+          "items": {
+            "$ref": "#/$defs/TokenAnnotation"
+          },
+          "title": "Annotations",
           "type": "array"
         },
         "spans": {
@@ -349,7 +356,7 @@
         },
         "tokens": {
           "items": {
-            "$ref": "#/$defs/Token"
+            "$ref": "#/$defs/TokenOrSeqRef"
           },
           "title": "Tokens",
           "type": "array"
@@ -485,68 +492,119 @@
       "title": "Span",
       "type": "object"
     },
-    "Token": {
-      "additionalProperties": true,
+    "Text": {
+      "description": "A named text segment on a :class:`Sample`.\n\nA sample's ``texts`` list carries one entry per source segment \u2014 for\nchat inputs that's one per message (including the system prompt); for\nplain-text inputs it's one per input string. The default naming scheme\nis role-based for chat (``\"system_0\"``, ``\"user_0\"``, ``\"assistant_0\"``,\n``\"user_1\"``, \u2026) and index-based for plain text (``\"text_0\"``,\n``\"text_1\"``, \u2026).\n\n``start`` and ``end`` are half-open token offsets covering the tokens\nthat render this text in the chat-template output (``[start, end)``):\nfor chat messages this captures the content plus any chat-template\ndelimiters assigned to that message; for plain text it covers the\nwhole token stream. They are ``None`` when the converter cannot map\nthe text to a token range (e.g. lossy decode round-trip).\n\n``metadata`` is a free-form dict for caller-supplied context (e.g.\nturn index, tool-call payload).",
       "properties": {
-        "token": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "start": {
           "anyOf": [
             {
-              "type": "string"
+              "type": "integer"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Token"
+          "title": "Start"
         },
-        "seq_id": {
+        "end": {
           "anyOf": [
             {
-              "type": "string"
+              "type": "integer"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Seq Id"
+          "title": "End"
         },
-        "id": {
-          "title": "Id",
-          "type": "integer"
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
         }
       },
       "required": [
-        "id"
+        "name",
+        "value"
       ],
-      "title": "Token",
+      "title": "Text",
       "type": "object"
     },
-    "TokenExtras": {
-      "description": "Conventional extra fields recognized by inif tooling.\n\nTokens accept arbitrary extras (``model_config[\"extra\"] = \"allow\"``); this\nmodel documents the well-known names so external validators, viewers, and\nconverters know what to expect. Not used at runtime \u2014 it only contributes\nto the JSON schema as a ``$defs`` entry.\n\nConventional ``role`` values: ``\"system\"``, ``\"user\"``, ``\"assistant\"``,\n``\"template\"``.\n\nConventional tags include: ``\"generated\"`` (model-produced),\n``\"special\"`` (special tokenizer ids), ``\"number\"``, ``\"entity\"``.",
+    "TokenAnnotation": {
       "properties": {
-        "tags": {
-          "description": "User-assigned labels",
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "ranges": {
           "items": {
-            "type": "string"
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "type": "array"
           },
-          "title": "Tags",
+          "title": "Ranges",
           "type": "array"
         },
-        "role": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "TokenAnnotation",
+      "type": "object"
+    },
+    "TokenOrSeqRef": {
+      "additionalProperties": true,
+      "description": "A token entry \u2014 either a vocabulary token or a reference to a Sequence.\n\nA vocabulary token has an integer ``id`` (the model's vocab id) and a\n``token`` string (the decoded piece). A sequence reference has\n``id is None`` and uses the ``token`` field to carry the target\n:class:`Sequence` id (a string). The presence / absence of ``id`` is\nthe discriminator \u2014 there is no separate ``sequence_id`` field.\n\nTokens accept arbitrary extra fields via ``model_config[\"extra\"] =\n\"allow\"``. Use the :meth:`set_extra` / :meth:`get_extra` helpers (not\ndirect attribute assignment) so values stay in sync between\n``__dict__`` and ``model_extra``.",
+      "properties": {
+        "token": {
+          "title": "Token",
+          "type": "string"
+        },
+        "id": {
           "anyOf": [
             {
-              "type": "string"
+              "type": "integer"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "description": "Chat-template role: system | user | assistant | template",
-          "title": "Role"
-        },
+          "title": "Id"
+        }
+      },
+      "required": [
+        "token"
+      ],
+      "title": "TokenOrSeqRef",
+      "type": "object"
+    },
+    "TokenExtras": {
+      "description": "Conventional extra fields recognized by inif tooling.\n\nTokens accept arbitrary extras (``model_config[\"extra\"] = \"allow\"``); this\nmodel documents the well-known names so external validators, viewers, and\nconverters know what to expect. Not used at runtime \u2014 it only contributes\nto the JSON schema as a ``$defs`` entry.\n\nRepeated token labels such as chat roles, ``\"generated\"``, and\n``\"reasoning\"`` are stored in :class:`TokenAnnotation` ranges on\n:class:`Sample`, not repeated on every token.",
+      "properties": {
         "logprob": {
           "anyOf": [
             {

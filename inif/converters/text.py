@@ -11,7 +11,7 @@ from inif.converters._decode import (
     has_byte_level_decoder,
     offset_mapping_decode_text,
 )
-from inif.converters._tokenize import name_messages
+from inif.converters._tokenize import _populate_text_offsets, name_messages
 from inif.models import (
     InifDocument,
     Metadata,
@@ -20,7 +20,6 @@ from inif.models import (
     Text,
     TokenOrSeqRef,
 )
-from inif.sequences import deduplicate_sequences
 
 
 def _get_package_versions() -> dict[str, str]:
@@ -82,7 +81,7 @@ def from_texts(
     texts: list[str] | list[list[dict[str, str]]],
     tokenizer: Any,
     sample_ids: list[str] | None = None,
-    min_sequence_length: int = 3,
+    min_sequence_length: int = 5,
     deduplicate: bool = True,
     tag_chat_roles: bool = False,
 ) -> InifDocument:
@@ -145,6 +144,7 @@ def from_texts(
                 for tid, piece in zip(token_ids, pieces)
             ]
             sample_texts = name_messages(item)
+            _populate_text_offsets(sample_texts, item, tokens, tok)
             chat_messages.append(item)
         else:
             ids, strings = _tokenize_text(
@@ -156,7 +156,7 @@ def from_texts(
             tokens = [
                 TokenOrSeqRef(id=tid, token=tstr) for tid, tstr in zip(ids, strings)
             ]
-            sample_texts = [Text(name="text_0", value=item)]
+            sample_texts = [Text(name="text_0", value=item, start=0, end=len(tokens))]
             chat_messages.append(None)
         samples.append(Sample(id=sid, tokens=tokens, texts=sample_texts))
 
@@ -169,14 +169,12 @@ def from_texts(
     doc = InifDocument(metadata=metadata, samples=samples)
 
     if deduplicate:
-        doc = deduplicate_sequences(doc, min_length=min_sequence_length)
+        doc = doc.deduplicate_sequences(min_length=min_sequence_length)
 
     if tag_chat_roles and any(m is not None for m in chat_messages):
-        from inif.tagging import tag_chat_roles as _tag_chat_roles
-
         for sample, msgs in zip(doc.samples, chat_messages):
             if msgs is not None:
-                _tag_chat_roles(sample, msgs, tok, doc.sequences or None)
+                sample.tag_chat_roles(msgs, tok, sequences=doc.sequences or None)
 
     return doc
 
@@ -184,7 +182,7 @@ def from_texts(
 def from_text_files(
     paths: list[str | Path],
     tokenizer: Any,
-    min_sequence_length: int = 3,
+    min_sequence_length: int = 5,
     deduplicate: bool = True,
 ) -> InifDocument:
     """Each file becomes one Sample. Finds common sequences across samples.

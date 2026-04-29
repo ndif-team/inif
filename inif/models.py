@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+if TYPE_CHECKING:
+    from inif._token_ops import PredicateTag
+    from inif.selectors import TokenSelection
+    from inif.tagging import TextTagMode
 
 
 class Text(BaseModel):
@@ -17,13 +23,34 @@ class Text(BaseModel):
     ``"user_1"``, …) and index-based for plain text (``"text_0"``,
     ``"text_1"``, …).
 
+    ``start`` and ``end`` are half-open token offsets covering the tokens
+    that render this text in the chat-template output (``[start, end)``):
+    for chat messages this captures the content plus any chat-template
+    delimiters assigned to that message; for plain text it covers the
+    whole token stream. They are ``None`` when the converter cannot map
+    the text to a token range (e.g. lossy decode round-trip).
+
     ``metadata`` is a free-form dict for caller-supplied context (e.g.
     turn index, tool-call payload).
     """
 
     name: str
     value: str
+    start: int | None = None
+    end: int | None = None
     metadata: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_offsets(self) -> Text:
+        if self.start is None and self.end is None:
+            return self
+        assert self.start is not None and self.end is not None, (
+            f"Text {self.name!r} must set both start and end or neither"
+        )
+        assert 0 <= self.start <= self.end, (
+            f"Text {self.name!r} has invalid range [{self.start}, {self.end})"
+        )
+        return self
 
 
 class ModelInfo(BaseModel):
@@ -247,7 +274,14 @@ class Sample(BaseModel):
                     f"Span '{span.name}' position {pos} out of range "
                     f"for sample {self.id!r} (n_tokens={n})"
                 )
+        seen_names: set[str] = set()
         for annotation in self.annotations:
+            assert annotation.name not in seen_names, (
+                f"Duplicate annotation name '{annotation.name}' on sample "
+                f"{self.id!r}: each name may appear at most once in "
+                "Sample.annotations."
+            )
+            seen_names.add(annotation.name)
             annotation.ranges = _merge_ranges(annotation.ranges)
             for start, end in annotation.ranges:
                 assert 0 <= start < end <= n, (
@@ -262,6 +296,17 @@ class Sample(BaseModel):
         ranges: Iterable[tuple[int, int]],
         metadata: dict | None = None,
     ) -> TokenAnnotation:
+        """Add ``ranges`` to the annotation called ``name``.
+
+        Each annotation name maps to exactly one entry on
+        ``Sample.annotations``. If the entry already exists, the new ranges
+        are appended and ``_merge_ranges`` collapses any overlapping or
+        adjacent intervals into single half-open spans (so adding ``[6, 10)``
+        to existing ``[5, 7)`` yields a single ``[5, 10)``). The existing
+        entry's metadata is preserved — passing a different ``metadata`` on a
+        subsequent call to the same name is a silent no-op for the metadata
+        field; only the ranges are merged in.
+        """
         merged = _merge_ranges(ranges)
         if not merged:
             return TokenAnnotation(name=name, metadata=dict(metadata or {}))
@@ -271,12 +316,13 @@ class Sample(BaseModel):
                 f"Annotation '{name}' range [{start}, {end}) out of range "
                 f"for sample {self.id!r} (n_tokens={n})"
             )
-        md = dict(metadata or {})
-        for annotation in self.annotations:
-            if annotation.name == name and annotation.metadata == md:
-                annotation.ranges = _merge_ranges([*annotation.ranges, *merged])
-                return annotation
-        annotation = TokenAnnotation(name=name, ranges=merged, metadata=md)
+        existing = next((a for a in self.annotations if a.name == name), None)
+        if existing is not None:
+            existing.ranges = _merge_ranges([*existing.ranges, *merged])
+            return existing
+        annotation = TokenAnnotation(
+            name=name, ranges=merged, metadata=dict(metadata or {})
+        )
         self.annotations.append(annotation)
         return annotation
 
@@ -319,6 +365,16 @@ class Sample(BaseModel):
                 else:
                     adjusted.append((start, end + delta))
             annotation.ranges = _merge_ranges(adjusted)
+        for text in self.texts:
+            if text.start is None or text.end is None:
+                continue
+            if text.end <= index:
+                continue
+            if text.start > index:
+                text.start += delta
+                text.end += delta
+            else:
+                text.end += delta
 
     def get_expanded_tokens(self, sequences: list[Sequence]) -> list[TokenOrSeqRef]:
         # Build the sequence map once per call instead of rebuilding it inside
@@ -339,6 +395,148 @@ class Sample(BaseModel):
     def get_tokens_by_positions(self, positions: list[int]) -> list[TokenOrSeqRef]:
         pos_set = set(positions)
         return [t for i, t in enumerate(self.tokens) if i in pos_set]
+
+    # ------------------------------------------------------------------
+    # Selection
+    # ------------------------------------------------------------------
+
+    def select_by_position(
+        self, positions: int | list[int] | slice
+    ) -> "TokenSelection":
+        """Select tokens at the given position(s).
+
+        Accepts an ``int``, list of ``int``, or ``slice``. Returns a
+        :class:`~inif.selectors.TokenSelection` with the matching tokens and
+        their positions in this sample.
+        """
+        from inif.selectors import _select_by_position
+
+        return _select_by_position(self, positions)
+
+    def select_by_annotation(self, annotation_name: str) -> "TokenSelection":
+        """Select tokens covered by ``annotation_name`` on this sample."""
+        from inif.selectors import _select_by_annotation
+
+        return _select_by_annotation(self, annotation_name)
+
+    def select_by_sequence_id(self, seq_id: str) -> "TokenSelection":
+        """Select sequence-ref tokens that point at ``seq_id``.
+
+        A sequence ref is identified by ``id is None`` and carries the target
+        :class:`Sequence` id in its ``token`` field. Useful for finding *where*
+        a shared run is referenced in a sample without expanding it.
+        """
+        from inif.selectors import _select_by_sequence_id
+
+        return _select_by_sequence_id(self, seq_id)
+
+    def select_by_span(self, span_name: str) -> "TokenSelection":
+        """Select tokens whose positions fall inside the named span."""
+        from inif.selectors import _select_by_span
+
+        return _select_by_span(self, span_name)
+
+    # ------------------------------------------------------------------
+    # Tagging
+    # ------------------------------------------------------------------
+
+    def tag_by_regex(
+        self,
+        pattern: str | re.Pattern[str],
+        tag: str,
+        sequences: list[Sequence] | None = None,
+    ) -> None:
+        """Tag every token whose string matches ``pattern``.
+
+        When ``sequences`` is provided, the search runs over the *expanded*
+        view of the sample so tokens currently compressed inside a sequence
+        ref are inspected too. Matches inside a ref cause the containing ref
+        to be materialized in this sample (per-token information attaches to
+        real Tokens; other refs and other samples are untouched).
+        """
+        self.tag_by_regexes([(pattern, tag)], sequences=sequences)
+
+    def tag_by_regexes(
+        self,
+        regex_tags: list[tuple[str | re.Pattern[str], str]],
+        sequences: list[Sequence] | None = None,
+    ) -> None:
+        """Apply multiple regex taggers in one token pass.
+
+        The preferred entry point when several regex strategies are known up
+        front. If ``sequences`` is provided, sequence refs are materialized
+        only when at least one expanded token actually matches.
+        """
+        from inif.tagging import _tag_by_regexes
+
+        _tag_by_regexes(self, regex_tags, sequences=sequences)
+
+    def tag_by_text_regex(
+        self,
+        pattern: str,
+        tag: str,
+        mode: "TextTagMode | str" = "all",
+    ) -> None:
+        """Tag tokens whose concatenated text matches a regex.
+
+        See :func:`inif.tagging._tag_by_text_regex` for the matching algorithm
+        and the meaning of ``mode``.
+        """
+        from inif.tagging import TextTagMode, _tag_by_text_regex
+
+        _tag_by_text_regex(self, pattern, tag, mode=TextTagMode(mode))
+
+    def tag_by_predicate(
+        self,
+        predicate: Callable[["TokenOrSeqRef"], bool],
+        tag: str,
+    ) -> None:
+        """Tag tokens that satisfy ``predicate``."""
+        self.tag_by_predicates([(predicate, tag)])
+
+    def tag_by_predicates(
+        self,
+        predicate_tags: list["PredicateTag"],
+        sequences: list[Sequence] | None = None,
+    ) -> None:
+        """Apply multiple Python predicate taggers in one token pass."""
+        from inif.tagging import _tag_by_predicates
+
+        _tag_by_predicates(self, predicate_tags, sequences=sequences)
+
+    def tag_chat_roles(
+        self,
+        messages: list[dict[str, str]],
+        tokenizer: Any,
+        sequences: list[Sequence] | None = None,
+    ) -> None:
+        """Tag tokens with their chat-template role.
+
+        Works with any HuggingFace chat template. Content tokens get the role
+        of their enclosing message; everything else (delimiters, role names,
+        auto-generated text) is tagged ``"template"``. Must be called AFTER
+        :meth:`InifDocument.deduplicate_sequences` if the document was
+        deduplicated.
+        """
+        from inif.tagging import _tag_chat_roles
+
+        _tag_chat_roles(self, messages, tokenizer, sequences=sequences)
+
+    def tag_special_tokens(self, tokenizer: Any, tag: str = "special") -> None:
+        """Tag tokens whose id appears in ``tokenizer.all_special_ids``."""
+        from inif.tagging import _tag_special_tokens
+
+        _tag_special_tokens(self, tokenizer, tag=tag)
+
+    def create_span_from_tag(self, tag: str, span_name: str) -> Span:
+        """Build a :class:`Span` whose positions are everywhere ``tag`` is set.
+
+        The new span is appended to ``self.spans`` and returned. Existing
+        spans are left untouched.
+        """
+        from inif.tagging import _create_span_from_tag
+
+        return _create_span_from_tag(self, tag, span_name)
 
     def materialize_position(
         self,
@@ -451,11 +649,22 @@ class InifDocument(BaseModel):
             samples=kept_samples,
         )
 
-    def to_dict(self, compact: bool = True) -> dict:
-        """See :func:`inif.io.to_dict`."""
-        from inif.io import to_dict
+    # ------------------------------------------------------------------
+    # Serialization & IO
+    # ------------------------------------------------------------------
 
-        return to_dict(self, compact=compact)
+    def to_dict(self, compact: bool = True) -> dict:
+        """Convert this document to a JSON-ready dict.
+
+        Uses pydantic's ``mode="json"`` so datetimes serialize as ISO-8601
+        strings. With ``compact=True`` (default), default-valued and ``None``
+        fields are stripped — for example, sequence-ref tokens
+        (``id is None``) serialize to a single-key
+        ``{"token": "<seq_id>"}`` dict.
+        """
+        from inif.io import _to_dict
+
+        return _to_dict(self, compact=compact)
 
     def save(
         self,
@@ -464,24 +673,189 @@ class InifDocument(BaseModel):
         compact: bool = True,
         indent: int | None = 4,
     ) -> None:
-        """See :func:`inif.io.save`."""
-        from inif.io import save
+        """Save this document to ``path``.
 
-        save(self, path, compress=compress, compact=compact, indent=indent)
+        ``.inif`` paths are written as indexed compressed archives;
+        ``.inif.json`` / ``.json`` paths are written as plain JSON. ``indent``
+        controls pretty-printing for plain JSON (``None`` produces a
+        single-line dump).
+        """
+        from inif.io import _save
+
+        _save(self, path, compress=compress, compact=compact, indent=indent)
 
     @classmethod
     def from_dict(cls, data: dict) -> InifDocument:
-        """See :func:`inif.io.from_dict`."""
-        from inif.io import from_dict
+        """Build an :class:`InifDocument` from a JSON-ready dict."""
+        from inif.io import _from_dict
 
-        return from_dict(data)
+        return _from_dict(data)
 
     @classmethod
     def load(cls, path: str | Path, compress: bool | None = None) -> InifDocument:
-        """See :func:`inif.io.load`."""
-        from inif.io import load
+        """Load an :class:`InifDocument` from ``path``.
 
-        return load(path, compress=compress)
+        ``.inif`` paths are read as indexed archives; ``.inif.json`` /
+        ``.json`` paths are read as plain JSON.
+        """
+        from inif.io import _load
+
+        return _load(path, compress=compress)
+
+    # ------------------------------------------------------------------
+    # Sequence (de)duplication
+    # ------------------------------------------------------------------
+
+    def deduplicate_sequences(self, min_length: int = 5) -> InifDocument:
+        """Find token runs common to ALL samples and replace them with refs.
+
+        Returns a new document; this one is not modified. Common runs of
+        length ``min_length`` or more are extracted into :class:`Sequence`
+        objects and the tokens carrying them in each sample are swapped for
+        a sequence-ref :class:`TokenOrSeqRef`.
+        """
+        from inif.sequences import _deduplicate_sequences
+
+        return _deduplicate_sequences(self, min_length=min_length)
+
+    def expand_sequences(self) -> InifDocument:
+        """Expand all sequence references back to flat vocab tokens.
+
+        Returns a new document whose tokens are independent from this one and
+        whose ``sequences`` list is empty. Re-running
+        :meth:`deduplicate_sequences` rediscovers the same shared runs.
+        """
+        from inif.sequences import _expand_sequences
+
+        return _expand_sequences(self)
+
+    # ------------------------------------------------------------------
+    # Selection
+    # ------------------------------------------------------------------
+
+    def filter_samples_by_score(
+        self,
+        scorer: str,
+        predicate: Callable[[str | int | float | bool | list | dict], bool],
+    ) -> list[Sample]:
+        """Return samples whose ``scorer`` value satisfies ``predicate``.
+
+        Compose with the per-sample selection methods (e.g.
+        :meth:`Sample.select_by_annotation`) on each returned sample to drill
+        down to specific tokens.
+        """
+        from inif.selectors import _filter_samples_by_score
+
+        return _filter_samples_by_score(self, scorer, predicate)
+
+    # ------------------------------------------------------------------
+    # Tagging (document-wide)
+    # ------------------------------------------------------------------
+
+    def tag_by_regex(self, pattern: str | re.Pattern[str], tag: str) -> None:
+        """Tag every token across all samples whose string matches ``pattern``."""
+        self.tag_by_regexes([(pattern, tag)])
+
+    def tag_by_regexes(
+        self,
+        regex_tags: list[tuple[str | re.Pattern[str], str]],
+    ) -> None:
+        """Apply multiple regex taggers across all samples in one pass per sample."""
+        from inif.tagging import _tag_by_regexes_doc
+
+        _tag_by_regexes_doc(self, regex_tags)
+
+    def tag_by_text_regex(
+        self,
+        pattern: str,
+        tag: str,
+        mode: "TextTagMode | str" = "all",
+    ) -> None:
+        """Apply text-based regex tagging across all samples."""
+        from inif.tagging import TextTagMode, _tag_by_text_regex_doc
+
+        _tag_by_text_regex_doc(self, pattern, tag, mode=TextTagMode(mode))
+
+    def tag_by_predicates(self, predicate_tags: list["PredicateTag"]) -> None:
+        """Apply multiple Python predicate taggers across all samples."""
+        from inif.tagging import _tag_by_predicates_doc
+
+        _tag_by_predicates_doc(self, predicate_tags)
+
+    def tag_chat_roles(
+        self,
+        messages_per_sample: list[list[dict[str, str]]],
+        tokenizer: Any,
+    ) -> None:
+        """Tag chat roles for every sample in this document.
+
+        ``messages_per_sample`` must be a list with one message list per
+        sample, in the same order as ``self.samples``.
+        """
+        from inif.tagging import _tag_chat_roles_doc
+
+        _tag_chat_roles_doc(self, messages_per_sample, tokenizer)
+
+    def remove_annotation(self, name: str) -> None:
+        """Remove every annotation named ``name`` across all samples."""
+        for sample in self.samples:
+            sample.remove_annotation(name)
+
+    # ------------------------------------------------------------------
+    # Visualization
+    # ------------------------------------------------------------------
+
+    def render_html(
+        self,
+        compact: bool = False,
+        title: str | None = None,
+        tokenizer: Any = None,
+    ) -> str:
+        """Render this document as a self-contained HTML string.
+
+        When ``tokenizer`` is provided, the tokenizer's byte-level
+        representation of newlines (e.g. ``Ċ`` for GPT-2 family) is detected
+        automatically so that visual line breaks are inserted after newline
+        tokens.
+        """
+        from inif.viewer import _render_html
+
+        return _render_html(self, compact=compact, title=title, tokenizer=tokenizer)
+
+    def show(
+        self,
+        compact: bool = False,
+        title: str | None = None,
+        tokenizer: Any = None,
+    ) -> Any:
+        """Display this document as HTML in a Jupyter notebook."""
+        from inif.viewer import _show
+
+        return _show(self, compact=compact, title=title, tokenizer=tokenizer)
+
+    def save_html(
+        self,
+        path: str | Path,
+        compact: bool = False,
+        title: str | None = None,
+        source: str | Path | None = None,
+        tokenizer: Any = None,
+    ) -> None:
+        """Save this document as a self-contained HTML file.
+
+        When ``title`` is not given, the source filename is used if
+        available, otherwise falls back to the model name.
+        """
+        from inif.viewer import _save_html
+
+        _save_html(
+            self,
+            path,
+            compact=compact,
+            title=title,
+            source=source,
+            tokenizer=tokenizer,
+        )
 
 
 def _merge_ranges(ranges: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:

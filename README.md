@@ -23,14 +23,13 @@ pip install "inif[inspect]"
 ### From text
 
 ```python
-from inif import load, save
 from inif.converters.text import from_texts
 
 doc = from_texts(
     ["The capital of France is Paris.", "Hello world!"],
     tokenizer="gpt2",
 )
-save(doc, "traces.inif.json")
+doc.save("traces.inif.json")
 ```
 
 ### From Inspect AI eval logs
@@ -44,11 +43,11 @@ doc = from_eval_file("logs/my_eval.eval")
 ### Viewing
 
 ```python
-from inif import load, show, save_html
+from inif import InifDocument
 
-doc = load("traces.inif.json")
-show(doc)  # in Jupyter
-save_html(doc, "traces.html")  # self-contained HTML
+doc = InifDocument.load("traces.inif.json")
+doc.show()  # in Jupyter
+doc.save_html("traces.html")  # self-contained HTML
 ```
 
 ## CLI
@@ -103,11 +102,10 @@ from inif import (
     iter_samples,
     read_info,
     read_samples,
-    save,
 )
 
-save(doc, "traces.inif")                     # indexed archive
-save(doc, "traces.inif.json")                # plain JSON
+doc.save("traces.inif")                      # indexed archive
+doc.save("traces.inif.json")                 # plain JSON
 
 info = read_info("traces.inif")              # metadata + per-sample summaries
 sample = read_samples("traces.inif", "sample_42")[0]      # single id
@@ -131,27 +129,25 @@ streaming iteration while preserving the same `InifDocument` model.
 
 ### Annotation
 
+All tagging is exposed as methods on `Sample` (single-sample) and `InifDocument` (whole-document fan-out). The two pairs share names so the receiver disambiguates the scope.
+
 ```python
-from inif import tag_by_regex_all, tag_by_text_regex, create_span_from_tag
+# Annotate every matching token across the whole document
+doc.tag_by_regex(r"^\d+$", "number")
 
-# Annotate tokens matching a regex pattern
-tag_by_regex_all(doc, r"^\d+$", "number")
+# Annotate by concatenated text (multi-token matches) on one sample
+sample.tag_by_text_regex(r"Paris", "city")
 
-# Annotate by concatenated text (multi-token matches)
-tag_by_text_regex(sample, r"Paris", "city")
-
-# Convert annotations to named spans
-create_span_from_tag(sample, "city", "answer_span")
+# Convert an annotation into a named span on a sample
+sample.create_span_from_tag("city", "answer_span")
 ```
 
 ### Selection
 
 ```python
-from inif import select_by_annotation, select_by_span, select_by_position
-
-selection = select_by_annotation(sample, "number")
-selection = select_by_span(sample, "answer_span")
-selection = select_by_position(sample, slice(5, 10))
+selection = sample.select_by_annotation("number")
+selection = sample.select_by_span("answer_span")
+selection = sample.select_by_position(slice(5, 10))
 ```
 
 ### Sequence deduplication
@@ -159,15 +155,13 @@ selection = select_by_position(sample, slice(5, 10))
 Common token sequences across samples (e.g. shared system prompts) are automatically deduplicated via set-intersection and stored as `Sequence` objects referenced by tokens.
 
 ```python
-from inif import deduplicate_sequences, expand_sequences
-
-deduplicate_sequences(doc, min_length=3)  # compress
-expand_sequences(doc)                     # flatten back
+deduped = doc.deduplicate_sequences()             # default min_length=5
+flat = deduped.expand_sequences()                 # flatten back
 ```
 
 ### Interactive HTML viewer
 
-`save_html` / `show` produce a self-contained HTML page with:
+`InifDocument.save_html` / `InifDocument.show` produce a self-contained HTML page with:
 
 - Collapsible sidebar with sample list and pass/fail indicators
 - Token-level display with hover tooltips showing all extra fields

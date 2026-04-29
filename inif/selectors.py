@@ -13,9 +13,10 @@ class TokenSelection:
     positions: list[int] = field(default_factory=list)
 
 
-def select_by_position(
+def _select_by_position(
     sample: Sample, positions: int | list[int] | slice
 ) -> TokenSelection:
+    """Implementation backing :meth:`Sample.select_by_position`."""
     n = len(sample.tokens)
     if isinstance(positions, int):
         positions = [positions]
@@ -31,7 +32,8 @@ def select_by_position(
     )
 
 
-def select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection:
+def _select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection:
+    """Implementation backing :meth:`Sample.select_by_annotation`."""
     positions = sample.annotation_positions(annotation_name)
     tokens = sample.get_tokens_by_positions(positions)
     return TokenSelection(
@@ -41,8 +43,8 @@ def select_by_annotation(sample: Sample, annotation_name: str) -> TokenSelection
     )
 
 
-def select_by_sequence_id(sample: Sample, seq_id: str) -> TokenSelection:
-    """Select sequence-ref tokens that point at the given sequence id.
+def _select_by_sequence_id(sample: Sample, seq_id: str) -> TokenSelection:
+    """Implementation backing :meth:`Sample.select_by_sequence_id`.
 
     A sequence ref is identified by ``id is None`` and carries the target
     :class:`Sequence` id in its ``token`` field. Useful for finding *where*
@@ -61,7 +63,8 @@ def select_by_sequence_id(sample: Sample, seq_id: str) -> TokenSelection:
     )
 
 
-def select_by_span(sample: Sample, span_name: str) -> TokenSelection:
+def _select_by_span(sample: Sample, span_name: str) -> TokenSelection:
+    """Implementation backing :meth:`Sample.select_by_span`."""
     position_set: set[int] = set()
     for span in sample.spans:
         if span.name == span_name:
@@ -75,15 +78,14 @@ def select_by_span(sample: Sample, span_name: str) -> TokenSelection:
     )
 
 
-def filter_samples_by_score(
+def _filter_samples_by_score(
     doc: InifDocument,
     scorer: str,
     predicate: Callable[[str | int | float | bool | list | dict], bool],
 ) -> list[Sample]:
-    """Return samples whose ``scorer`` value satisfies ``predicate``.
+    """Implementation backing :meth:`InifDocument.filter_samples_by_score`.
 
-    Compose with the position selectors above (``select`` etc.) on
-    each returned sample to drill down to specific tokens.
+    Returns samples whose ``scorer`` value satisfies ``predicate``.
     """
     results: list[Sample] = []
     for sample in doc.samples:

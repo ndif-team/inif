@@ -33,8 +33,8 @@ def _assert_json_or_indexed(path: Path, compress: bool | None) -> None:
     )
 
 
-def to_dict(doc: InifDocument, compact: bool = True) -> dict:
-    """Convert ``doc`` to a JSON-ready dict.
+def _to_dict(doc: InifDocument, compact: bool = True) -> dict:
+    """Implementation backing :meth:`InifDocument.to_dict`.
 
     Uses pydantic's ``mode="json"`` so datetimes serialize as ISO-8601
     strings. With ``compact=True`` (default), default-valued and ``None``
@@ -48,7 +48,8 @@ def to_dict(doc: InifDocument, compact: bool = True) -> dict:
     return doc.model_dump(mode="json", by_alias=True)
 
 
-def from_dict(data: dict) -> InifDocument:
+def _from_dict(data: dict) -> InifDocument:
+    """Implementation backing :meth:`InifDocument.from_dict`."""
     return InifDocument.model_validate(data)
 
 
@@ -119,14 +120,14 @@ def _dumps_pretty(value: Any, indent: int = 4, level: int = 0) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def save(
+def _save(
     doc: InifDocument,
     path: str | Path,
     compress: bool | None = None,
     compact: bool = True,
     indent: int | None = 4,
 ) -> None:
-    """Save ``doc`` to ``path``.
+    """Implementation backing :meth:`InifDocument.save`.
 
     ``.inif`` paths are written as indexed compressed archives. JSON paths are
     written as plain JSON. The old gzip ``compress`` override is no longer
@@ -144,7 +145,7 @@ def save(
         save_indexed(doc, path, compact=compact)
         return
 
-    data = to_dict(doc, compact=compact)
+    data = _to_dict(doc, compact=compact)
     if indent is None or indent <= 0:
         json_str = json.dumps(data, ensure_ascii=False)
     else:
@@ -154,8 +155,8 @@ def save(
         f.write(json_str)
 
 
-def load(path: str | Path, compress: bool | None = None) -> InifDocument:
-    """Load an inif document from ``path``.
+def _load(path: str | Path, compress: bool | None = None) -> InifDocument:
+    """Implementation backing :meth:`InifDocument.load`.
 
     ``.inif`` paths are read as indexed archives. JSON paths are read as plain
     JSON. The old gzip ``compress`` override is no longer supported.
@@ -169,7 +170,7 @@ def load(path: str | Path, compress: bool | None = None) -> InifDocument:
 
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return from_dict(data)
+    return _from_dict(data)
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +221,7 @@ def iter_samples(path: str | Path) -> Iterator[Sample]:
 
         yield from iter_indexed_samples(path)
         return
-    doc = load(path)
+    doc = _load(path)
     yield from doc.samples
 
 
@@ -257,7 +258,7 @@ def read_samples(
 
         return read_indexed_samples(path, requested)
 
-    doc = load(path)
+    doc = _load(path)
     by_id = {s.id: s for s in doc.samples}
     missing = [sid for sid in requested if sid not in by_id]
     if missing:
@@ -294,7 +295,7 @@ def read_info(path: str | Path) -> DocumentInfo:
     else:
         from inif.indexed import _DEFAULT_TEXT_PREVIEW_CHARS, _sample_summary
 
-        doc = load(path)
+        doc = _load(path)
         header = doc
         summaries = [
             _sample_summary(s, _DEFAULT_TEXT_PREVIEW_CHARS) for s in doc.samples
