@@ -21,8 +21,9 @@ the `inif view` CLI command.
   pastel palette.
 - Per-message panels driven by `Sample.texts` — each message renders its
   own `value` (with markdown for assistant content), nested children for
-  reasoning / content / tool-call sub-sections, and an eye toggle that
-  filters the token strip to that message's range.
+  reasoning / content / tool-call sub-sections, and a labeled `tokens` /
+  `text` toggle that swaps the panel between the rendered text view and
+  the corresponding token strip for that message's range.
 - Span borders and underline indicators for tokens carrying extras (e.g.
   `logprob`, `logit_lens`, `probe_score`).
 - Newline-aware token wrapping — visual line breaks are inserted after

@@ -136,6 +136,13 @@ Some tokenizers (notably Qwen's, which replaces U+2028 with U+FFFD) are
 lossy and won't round-trip from per-token decode back to the formatted
 template string. Role tagging is a no-op for those samples rather than
 raising.
+
+Some chat templates (Qwen3-family) `|trim` per-message content (system /
+user / tool messages with leading or trailing whitespace), so the raw
+inspect-supplied text won't match in the rendered template. The role
+tagger retries the match with `text.strip()` before giving up, so those
+messages still get their role attribution instead of falling through to
+`template`.
 :::
 
 For a single sample, call

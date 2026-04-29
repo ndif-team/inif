@@ -76,7 +76,8 @@ doc = from_eval_log(eval_log, tokenizer="meta-llama/Llama-3.1-8B")
 |---|---|
 | `model.name` | `eval_log.eval.model`. |
 | `model.revision` | Tokenizer's `_commit_hash` when available. |
-| `model.generation_config` | `eval_log.plan.config` — captures `max_tokens`, `temperature`, `top_p`, `top_k`, `stop_seqs`, `frequency_penalty`, `presence_penalty`, `seed`. |
+| `model.generation_config` | Merged from `eval_log.plan.config` and `eval_log.eval.model_generate_config` — captures every non-None `GenerateConfig` field (sampling: `max_tokens` / `temperature` / `top_p` / `top_k` / `seed` / `stop_seqs` / `frequency_penalty` / `presence_penalty` / `best_of` / `logit_bias`; reasoning: `reasoning_effort` / `reasoning_tokens` / `reasoning_summary` / `reasoning_history`; tool use: `parallel_tool_calls` / `max_tool_output`; transport: `max_connections` / `max_retries` / `timeout`; plus `extra_headers` / `extra_body` / `response_schema` / `modalities` / …). Always includes `preserve_reasoning: True` (see callout below). |
+| `source_eval.extra` | Eval-time run options: `eval_config` (sample / message / token / time / cost limits, epochs, error-handling), plus `task_args`, `solver`, `solver_args`, `model_args` when set. |
 | `source_eval` | `framework="inspect_ai"`, plus `framework_version`, `task`, `task_version`, `eval_id`, `run_id`. |
 | `total_time` | `(eval_log.stats.completed_at - started_at).total_seconds()`. |
 | `packages` | `inif`, `transformers`, `inspect_ai` versions. |
@@ -116,6 +117,19 @@ either one). `render_chat_template` always passes `preserve_thinking=True`
 so chat templates that strip reasoning from history (Kimi-style) preserve
 it for analysis. Templates that don't recognise the kwarg silently ignore
 it.
+
+Some templates (Qwen3-family) instead hardcode reasoning rendering behind
+a `loop.index0 > ns.last_query_index` Jinja gate that no kwarg can flip —
+without intervention every historical assistant has its `<think>...</think>`
+block stripped from the rendered output. INIF rewrites the gate to `true`
+in `_patch_template_preserve_reasoning` before calling
+`apply_chat_template`, so every assistant's reasoning lands in the token
+stream regardless of position. The transformation is recorded as
+`Metadata.model.generation_config["preserve_reasoning"] = True` —
+downstream interpretability pipelines that need to replay what the model
+actually saw at turn N must reapply the original gating themselves. The
+patch is a no-op for templates that don't contain the `last_query_index`
+pattern (Kimi, GPT, Llama, Gemma, …).
 :::
 
 ## Per-token logprobs
@@ -138,7 +152,13 @@ what the tokenizer supports:
 
 1. **Offset mapping** — fast tokenizers exposing
    `return_offsets_mapping`. Per-token strings are exact slices of the
-   formatted template. Bulletproof for any character.
+   formatted template. Multi-byte UTF-8 characters split across byte-level
+   tokens (e.g. `♠` U+2660 → 2 tokens on Qwen3.5) report identical
+   `(start, end)` offsets on every fragment; the decoder tracks
+   `last_consumed` so the character is emitted by the first fragment and
+   subsequent fragments yield `""`. A final
+   `"".join(pieces) == formatted` integrity check returns `None` on any
+   remaining mismatch so the converter falls back to the next tier.
 2. **Byte-level slicing** — byte-level BPE tokenizers (e.g. Kimi's
    tiktoken variant) without offset support. Rebuilds per-token bytes via
    `tokenizer.byte_decoder` + `encoder`.
