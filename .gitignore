@@ -29,3 +29,5 @@ examples/*.json.gz
 examples/*_shards/
 /.quarto/
 **/*.quarto_ipynb
+docs/_site/
+docs/.quarto/

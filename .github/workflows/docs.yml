@@ -1,0 +1,58 @@
+name: Publish Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "inif/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# Only one concurrent deploy per branch; cancel any in-flight run if a newer
+# commit lands while we're still building.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+
+      # Quarto needs to find Python (and the inspect-docs filter imports
+      # ``griffe``), so resolve every group including ``doc``.
+      - run: uv sync --all-extras --all-groups
+
+      - uses: quarto-dev/quarto-actions/setup@v2
+
+      # Run quarto via ``uv run`` so the inspect-docs Pandoc filter picks up
+      # the venv's griffe / panflute / pyyaml. Point quarto at the docs/
+      # subdirectory which is the Quarto project root.
+      - run: uv run quarto render docs
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
